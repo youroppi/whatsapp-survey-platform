@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: whatsapp-survey-platform
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MAX_VOICE_DURATION_SECONDS
+        value: "60"
+      - key: VOICE_PROCESSING_TIMEOUT_MS
+        value: "30000"
+    disk:
+      name: whatsapp-session-data
+      mountPath: /app/.wwebjs_auth
+      sizeGB: 1
+
+databases:
+  - name: whatsapp-survey-db
+    plan: starter
