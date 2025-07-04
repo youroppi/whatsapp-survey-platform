@@ -5,71 +5,117 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WhatsApp Survey Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="bg-gray-50">
     <div class="min-h-screen p-6">
         <div class="max-w-7xl mx-auto">
+            <!-- Header -->
             <div class="mb-8">
-                <h1 class="text-3xl font-bold text-gray-800 mb-2">WhatsApp Survey Platform</h1>
-                <p class="text-gray-600">Admin Dashboard - Manage surveys and analyze responses</p>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h1 class="text-3xl font-bold text-gray-800 mb-2">WhatsApp Survey Platform</h1>
+                        <p class="text-gray-600">Admin Dashboard - Manage surveys and analyze responses</p>
+                    </div>
+                    <div id="back-button" class="hidden">
+                        <button onclick="showMainDashboard()" class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600">
+                            ← Back to Dashboard
+                        </button>
+                    </div>
+                </div>
             </div>
             
-            <!-- Status Panels -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <div class="bg-white rounded-xl shadow-lg p-6">
-                    <h2 class="text-xl font-bold text-gray-800 mb-4">WhatsApp Connection</h2>
-                    <div id="whatsapp-status" class="text-center">
-                        <div class="text-blue-600">🔄 Loading WhatsApp status...</div>
+            <!-- Main Dashboard View -->
+            <div id="main-dashboard">
+                <!-- Status Panels -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                    <div class="bg-white rounded-xl shadow-lg p-6">
+                        <h2 class="text-xl font-bold text-gray-800 mb-4">WhatsApp Connection</h2>
+                        <div id="whatsapp-status" class="text-center">
+                            <div class="text-blue-600">🔄 Loading WhatsApp status...</div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white rounded-xl shadow-lg p-6">
+                        <h2 class="text-xl font-bold text-gray-800 mb-4">AI Voice Features</h2>
+                        <div id="openai-status" class="text-center">
+                            <div class="text-blue-600">🔄 Checking AI configuration...</div>
+                        </div>
                     </div>
                 </div>
                 
-                <div class="bg-white rounded-xl shadow-lg p-6">
-                    <h2 class="text-xl font-bold text-gray-800 mb-4">AI Voice Features</h2>
-                    <div id="openai-status" class="text-center">
-                        <div class="text-blue-600">🔄 Checking AI configuration...</div>
+                <!-- Survey Management -->
+                <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-xl font-bold text-gray-800">Survey Management</h2>
+                        <button 
+                            onclick="showCreateSurvey()" 
+                            class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2 transition-colors"
+                        >
+                            <span class="text-lg">+</span>
+                            <span>Create Survey</span>
+                        </button>
                     </div>
-                </div>
-            </div>
-            
-            <!-- Survey Management -->
-            <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
-                <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-xl font-bold text-gray-800">Survey Management</h2>
-                    <button 
-                        onclick="showCreateSurvey()" 
-                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2 transition-colors"
-                    >
-                        <span class="text-lg">+</span>
-                        <span>Create Survey</span>
-                    </button>
+                    
+                    <div id="surveys-list" class="space-y-4">
+                        <div class="text-center text-gray-500 py-8">
+                            <div class="text-4xl mb-4">📊</div>
+                            <p>No surveys created yet. Click "Create Survey" to get started!</p>
+                        </div>
+                    </div>
                 </div>
                 
-                <div id="surveys-list" class="space-y-4">
-                    <div class="text-center text-gray-500 py-8">
-                        <div class="text-4xl mb-4">📊</div>
-                        <p>No surveys created yet. Click "Create Survey" to get started!</p>
+                <!-- Quick Start Guide -->
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Start Guide</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="bg-blue-50 rounded-lg p-4">
+                            <div class="text-2xl mb-2">1️⃣</div>
+                            <h3 class="font-semibold text-blue-800 mb-2">Create Survey</h3>
+                            <p class="text-sm text-blue-600">Design questions with multiple choice, ratings, or text responses</p>
+                        </div>
+                        <div class="bg-green-50 rounded-lg p-4">
+                            <div class="text-2xl mb-2">2️⃣</div>
+                            <h3 class="font-semibold text-green-800 mb-2">Activate Survey</h3>
+                            <p class="text-sm text-green-600">Make your survey live for WhatsApp participants</p>
+                        </div>
+                        <div class="bg-purple-50 rounded-lg p-4">
+                            <div class="text-2xl mb-2">3️⃣</div>
+                            <h3 class="font-semibold text-purple-800 mb-2">Collect Responses</h3>
+                            <p class="text-sm text-purple-600">Share your WhatsApp number and start collecting data!</p>
+                        </div>
                     </div>
                 </div>
             </div>
-            
-            <!-- Quick Start Guide -->
-            <div class="bg-white rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Start Guide</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div class="bg-blue-50 rounded-lg p-4">
-                        <div class="text-2xl mb-2">1️⃣</div>
-                        <h3 class="font-semibold text-blue-800 mb-2">Create Survey</h3>
-                        <p class="text-sm text-blue-600">Design questions with multiple choice, ratings, or text responses</p>
+
+            <!-- Results View -->
+            <div id="results-view" class="hidden">
+                <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <div>
+                            <h2 id="results-title" class="text-2xl font-bold text-gray-800">Survey Results</h2>
+                            <p id="results-subtitle" class="text-gray-600">Analytics and response data</p>
+                        </div>
+                        <div class="flex space-x-3">
+                            <button onclick="exportSurveyData()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center space-x-2">
+                                <span>📊</span>
+                                <span>Export CSV</span>
+                            </button>
+                            <button onclick="exportSurveyDataExcel()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2">
+                                <span>📈</span>
+                                <span>Export Excel</span>
+                            </button>
+                        </div>
                     </div>
-                    <div class="bg-green-50 rounded-lg p-4">
-                        <div class="text-2xl mb-2">2️⃣</div>
-                        <h3 class="font-semibold text-green-800 mb-2">Activate Survey</h3>
-                        <p class="text-sm text-green-600">Make your survey live for WhatsApp participants</p>
+
+                    <!-- Overview Stats -->
+                    <div id="overview-stats" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                        <!-- Stats will be populated dynamically -->
                     </div>
-                    <div class="bg-purple-50 rounded-lg p-4">
-                        <div class="text-2xl mb-2">3️⃣</div>
-                        <h3 class="font-semibold text-purple-800 mb-2">Collect Responses</h3>
-                        <p class="text-sm text-purple-600">Share your WhatsApp number and start collecting data!</p>
+
+                    <!-- Question Results -->
+                    <div id="question-results" class="space-y-8">
+                        <!-- Question analytics will be populated dynamically -->
                     </div>
                 </div>
             </div>
@@ -154,6 +200,249 @@
     <script>
         let surveys = [];
         let questions = [];
+        let currentSurveyResults = null;
+
+        // Navigation functions
+        function showMainDashboard() {
+            document.getElementById('main-dashboard').classList.remove('hidden');
+            document.getElementById('results-view').classList.add('hidden');
+            document.getElementById('back-button').classList.add('hidden');
+        }
+
+        function showResultsView(survey) {
+            document.getElementById('main-dashboard').classList.add('hidden');
+            document.getElementById('results-view').classList.remove('hidden');
+            document.getElementById('back-button').classList.remove('hidden');
+            
+            document.getElementById('results-title').textContent = `Results: ${survey.title}`;
+            document.getElementById('results-subtitle').textContent = `${survey.questions.length} questions • ${survey.responses || 0} responses`;
+            
+            loadSurveyResults(survey.id);
+        }
+
+        // Load survey results and analytics
+        async function loadSurveyResults(surveyId) {
+            try {
+                const [analyticsResponse, responsesResponse] = await Promise.all([
+                    fetch(`/api/surveys/${surveyId}/analytics`),
+                    fetch(`/api/surveys/${surveyId}/responses`)
+                ]);
+                
+                const analytics = await analyticsResponse.json();
+                const responses = await responsesResponse.json();
+                
+                currentSurveyResults = { analytics, responses, surveyId };
+                renderSurveyResults(analytics);
+            } catch (error) {
+                console.error('Error loading survey results:', error);
+                alert('Error loading survey results. Please try again.');
+            }
+        }
+
+        // Render survey results
+        function renderSurveyResults(analytics) {
+            // Render overview stats
+            const statsContainer = document.getElementById('overview-stats');
+            statsContainer.innerHTML = `
+                <div class="bg-blue-50 rounded-lg p-4 text-center">
+                    <div class="text-2xl font-bold text-blue-900">${analytics.totalResponses}</div>
+                    <div class="text-blue-700 text-sm">Total Responses</div>
+                </div>
+                <div class="bg-green-50 rounded-lg p-4 text-center">
+                    <div class="text-2xl font-bold text-green-900">${analytics.uniqueParticipants}</div>
+                    <div class="text-green-700 text-sm">Unique Participants</div>
+                </div>
+                <div class="bg-purple-50 rounded-lg p-4 text-center">
+                    <div class="text-2xl font-bold text-purple-900">${Math.round((analytics.totalResponses / Math.max(analytics.uniqueParticipants, 1)) * 100)}%</div>
+                    <div class="text-purple-700 text-sm">Completion Rate</div>
+                </div>
+                <div class="bg-orange-50 rounded-lg p-4 text-center">
+                    <div class="text-2xl font-bold text-orange-900">${Object.keys(analytics.responsesByQuestion).length}</div>
+                    <div class="text-orange-700 text-sm">Questions</div>
+                </div>
+            `;
+
+            // Render question results
+            const resultsContainer = document.getElementById('question-results');
+            resultsContainer.innerHTML = '';
+
+            Object.entries(analytics.responsesByQuestion).forEach(([questionId, data], index) => {
+                const questionDiv = document.createElement('div');
+                questionDiv.className = 'bg-white border border-gray-200 rounded-lg p-6';
+                
+                let chartHTML = '';
+                
+                if (data.type === 'likert') {
+                    // Render rating scale results
+                    const chartId = `chart-${questionId}`;
+                    chartHTML = `
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div>
+                                <h4 class="font-medium text-gray-700 mb-3">Rating Distribution</h4>
+                                <canvas id="${chartId}" width="400" height="200"></canvas>
+                                <div class="mt-2 text-center">
+                                    <span class="text-lg font-semibold text-blue-600">Average: ${data.average.toFixed(1)}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <h4 class="font-medium text-gray-700 mb-3">Comments (${data.followUps.length})</h4>
+                                <div class="space-y-2 max-h-48 overflow-y-auto">
+                                    ${data.followUps.slice(0, 5).map(comment => `
+                                        <div class="bg-gray-50 p-3 rounded text-sm">"${comment}"</div>
+                                    `).join('')}
+                                    ${data.followUps.length === 0 ? '<p class="text-gray-500 text-sm">No comments yet.</p>' : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Render multiple choice / agree-disagree results
+                    const chartId = `chart-${questionId}`;
+                    chartHTML = `
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div>
+                                <h4 class="font-medium text-gray-700 mb-3">Response Distribution</h4>
+                                <canvas id="${chartId}" width="400" height="200"></canvas>
+                            </div>
+                            <div>
+                                <h4 class="font-medium text-gray-700 mb-3">Comments (${data.followUps.length})</h4>
+                                <div class="space-y-2 max-h-48 overflow-y-auto">
+                                    ${data.followUps.slice(0, 5).map(comment => `
+                                        <div class="bg-gray-50 p-3 rounded text-sm">"${comment}"</div>
+                                    `).join('')}
+                                    ${data.followUps.length === 0 ? '<p class="text-gray-500 text-sm">No comments yet.</p>' : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                questionDiv.innerHTML = `
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">
+                        Question ${index + 1}: ${data.question}
+                    </h3>
+                    ${chartHTML}
+                `;
+
+                resultsContainer.appendChild(questionDiv);
+
+                // Create charts after DOM update
+                setTimeout(() => {
+                    createChart(questionId, data);
+                }, 100);
+            });
+        }
+
+        // Create charts using Chart.js
+        function createChart(questionId, data) {
+            const canvas = document.getElementById(`chart-${questionId}`);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            
+            if (data.type === 'likert') {
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: Object.keys(data.distribution),
+                        datasets: [{
+                            label: 'Responses',
+                            data: Object.values(data.distribution),
+                            backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: { beginAtZero: true }
+                        }
+                    }
+                });
+            } else {
+                new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: Object.keys(data.responses),
+                        datasets: [{
+                            data: Object.values(data.responses),
+                            backgroundColor: [
+                                'rgba(34, 197, 94, 0.8)',
+                                'rgba(239, 68, 68, 0.8)',
+                                'rgba(168, 85, 247, 0.8)',
+                                'rgba(59, 130, 246, 0.8)',
+                                'rgba(249, 115, 22, 0.8)'
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        // Export functions
+        function exportSurveyData() {
+            if (!currentSurveyResults) {
+                alert('No survey data to export');
+                return;
+            }
+
+            const csvContent = generateCSV(currentSurveyResults.responses);
+            downloadFile(csvContent, `survey_${currentSurveyResults.surveyId}_responses.csv`, 'text/csv');
+        }
+
+        function exportSurveyDataExcel() {
+            if (!currentSurveyResults) {
+                alert('No survey data to export');
+                return;
+            }
+
+            // For Excel export, we'll use the same CSV format but with .xlsx extension
+            // In a real implementation, you might want to use a library like SheetJS
+            const csvContent = generateCSV(currentSurveyResults.responses);
+            downloadFile(csvContent, `survey_${currentSurveyResults.surveyId}_responses.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        }
+
+        function generateCSV(responses) {
+            if (responses.length === 0) {
+                return 'No data available';
+            }
+
+            const headers = ['Question', 'Answer', 'Follow-up Comment', 'Phone Number', 'Timestamp', 'Voice Transcribed'];
+            const rows = responses.map(response => [
+                `"${response.questionText}"`,
+                `"${response.answer}"`,
+                `"${response.followUp || ''}"`,
+                `"${response.phoneNumber.replace('@c.us', '')}"`,
+                `"${new Date(response.timestamp).toLocaleString()}"`,
+                `"${response.voiceMetadata ? 'Yes' : 'No'}"`
+            ]);
+
+            return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+        }
+
+        function downloadFile(content, filename, contentType) {
+            const blob = new Blob([content], { type: contentType });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
 
         // Load initial status
         async function loadStatus() {
@@ -224,7 +513,7 @@
         // Survey Management Functions
         function showCreateSurvey() {
             document.getElementById('create-survey-modal').classList.remove('hidden');
-            questions = []; // Reset questions array
+            questions = [];
             renderQuestions();
         }
 
@@ -540,10 +829,16 @@
                         >
                             ${survey.isActive ? 'Active' : 'Activate'}
                         </button>
-                        <button class="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600">
+                        <button 
+                            onclick="showResultsView(surveys.find(s => s.id === '${survey.id}'))"
+                            class="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+                        >
                             View Results
                         </button>
-                        <button class="px-3 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600">
+                        <button 
+                            onclick="exportSurveyById('${survey.id}')"
+                            class="px-3 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
+                        >
                             Export Data
                         </button>
                     </div>
@@ -571,6 +866,29 @@
             } catch (error) {
                 console.error('Error:', error);
                 alert('Error activating survey. Please check your connection.');
+            }
+        }
+
+        // Export survey by ID (from main dashboard)
+        async function exportSurveyById(surveyId) {
+            try {
+                const response = await fetch(`/api/surveys/${surveyId}/export`);
+                const data = await response.json();
+                
+                if (data.length === 0) {
+                    alert('No response data to export for this survey.');
+                    return;
+                }
+
+                const csvContent = [
+                    Object.keys(data[0]).join(','),
+                    ...data.map(row => Object.values(row).map(val => `"${val}"`).join(','))
+                ].join('\n');
+
+                downloadFile(csvContent, `survey_${surveyId}_responses.csv`, 'text/csv');
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error exporting survey data. Please try again.');
             }
         }
 
