@@ -151,76 +151,7 @@ async function translateToEnglish(text, detectedLanguage) {
   }
 }
 
-async function validateResponse(transcribedText, questionText, questionType) {
-  if (!isOpenAIConfigured) {
-    return { isValid: true, confidence: 0.8, reason: 'Validation disabled - API key not configured' };
-  }
-
-  try {
-    const response = await fetch(OPENAI_CHAT_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an AI assistant that validates survey responses. Your task is to determine if a transcribed voice response is a meaningful answer to a survey question.
-
-Rules:
-1. Return "VALID" if the response is a clear, meaningful answer to the question
-2. Return "INVALID" if the response is gibberish, unrelated, or doesn't make sense
-3. Return "UNCLEAR" if the response is ambiguous but might be valid
-4. Consider the question type: ${questionType}
-5. Be lenient with casual language, slang, or informal responses
-6. Focus on whether there's genuine intent to answer the question
-
-Format your response as JSON:
-{
-  "status": "VALID|INVALID|UNCLEAR",
-  "confidence": 0.0-1.0,
-  "reason": "Brief explanation"
-}`
-          },
-          {
-            role: 'user',
-            content: `Question: "${questionText}"
-Question Type: ${questionType}
-Response: "${transcribedText}"
-
-Please validate this response.`
-          }
-        ],
-        temperature: 0.1,
-        max_tokens: 200
-      }),
-      timeout: VOICE_PROCESSING_TIMEOUT
-    });
-
-    if (!response.ok) {
-      console.error('Validation API error:', response.status);
-      return { isValid: true, confidence: 0.5, reason: 'Validation service unavailable' };
-    }
-
-    const result = await response.json();
-    const validationResult = JSON.parse(result.choices[0].message.content);
-    
-    return {
-      isValid: validationResult.status === 'VALID',
-      confidence: validationResult.confidence,
-      reason: validationResult.reason,
-      status: validationResult.status
-    };
-  } catch (error) {
-    console.error('Response validation error:', error);
-    return { isValid: true, confidence: 0.5, reason: 'Validation error occurred' };
-  }
-}
-
-async function generateResponseSummary(transcribedText, originalText, language) {
+async function generateContextualSummary(transcribedText, originalText, language, questionText) {
   if (!isOpenAIConfigured) {
     return transcribedText;
   }
@@ -237,26 +168,27 @@ async function generateResponseSummary(transcribedText, originalText, language) 
         messages: [
           {
             role: 'system',
-            content: `You are an AI assistant that creates clear, concise summaries of survey responses. Your task is to summarize the user's voice response while preserving their original meaning and sentiment.
+            content: `You are an AI assistant that creates clear, concise summaries of survey responses in relation to the question asked. Your task is to summarize what the user said in a way that directly relates to the survey question.
 
 Rules:
-1. Keep the summary brief but complete
-2. Preserve the user's opinion and sentiment
-3. Use clear, professional language
-4. If the original was in another language, mention the language detected
-5. Focus on the key points the user wanted to express`
+1. Create a brief, clear summary of the user's response
+2. Connect their response to the survey question context
+3. Be positive and neutral - don't judge if the response is "good" or "bad"
+4. Keep it concise but capture the key sentiment and meaning
+5. Make it sound natural and conversational
+6. Focus on what they DID say, not what they didn't say`
           },
           {
             role: 'user',
-            content: `Original text: "${originalText}"
-${language !== 'en' ? `Translated text: "${transcribedText}"` : ''}
-Language detected: ${language}
+            content: `Survey Question: "${questionText}"
+User's Response: "${transcribedText}"
+${language !== 'en' ? `Original Language: ${language}` : ''}
 
-Please provide a clear summary of this response.`
+Please provide a clear summary of how their response relates to the question.`
           }
         ],
         temperature: 0.3,
-        max_tokens: 150
+        max_tokens: 100
       }),
       timeout: VOICE_PROCESSING_TIMEOUT
     });
