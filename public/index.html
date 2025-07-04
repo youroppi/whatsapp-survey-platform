@@ -1,103 +1,276 @@
-{
-  "package.json": {
-    "name": "whatsapp-survey-platform",
-    "version": "1.0.0",
-    "description": "WhatsApp-based survey platform with real-time analytics",
-    "main": "server.js",
-    "scripts": {
-      "start": "node server.js",
-      "dev": "nodemon server.js",
-      "build": "npm install",
-      "test": "echo \"Error: no test specified\" && exit 1"
-    },
-    "dependencies": {
-      "express": "^4.18.2",
-      "cors": "^2.8.5",
-      "socket.io": "^4.7.2",
-      "whatsapp-web.js": "^1.22.2",
-      "qrcode": "^1.5.3",
-      "pg": "^8.11.3",
-      "dotenv": "^16.3.1",
-      "helmet": "^7.0.0",
-      "rate-limiter-flexible": "^2.4.2",
-      "form-data": "^4.0.0",
-      "node-fetch": "^2.7.0"
-    },
-    "devDependencies": {
-      "nodemon": "^3.0.1"
-    },
-    "engines": {
-      "node": ">=16.0.0"
-    },
-    "keywords": [
-      "whatsapp",
-      "survey",
-      "analytics",
-      "bot",
-      "real-time"
-    ],
-    "author": "Your Name",
-    "license": "MIT"
-  },
-  
-  "render.yaml": {
-    "services": [
-      {
-        "type": "web",
-        "name": "whatsapp-survey-platform",
-        "runtime": "node",
-        "plan": "starter",
-        "buildCommand": "npm install",
-        "startCommand": "npm start",
-        "healthCheckPath": "/health",
-        "envVars": [
-          {
-            "key": "NODE_ENV",
-            "value": "production"
-          },
-          {
-            "key": "PORT",
-            "generateValue": true
-          },
-          {
-            "key": "SESSION_SECRET",
-            "generateValue": true
-          },
-          {
-            "key": "OPENAI_API_KEY",
-            "sync": false
-          },
-          {
-            "key": "MAX_VOICE_DURATION_SECONDS",
-            "value": "60"
-          },
-          {
-            "key": "VOICE_PROCESSING_TIMEOUT_MS",
-            "value": "30000"
-          }
-        ],
-        "disk": {
-          "name": "whatsapp-session-data",
-          "mountPath": "/app/.wwebjs_auth",
-          "sizeGB": 1
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Survey Platform - Admin Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/socket.io-client@4.7.2/dist/socket.io.min.js"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f9fafb;
         }
-      }
-    ],
-    "databases": [
-      {
-        "name": "whatsapp-survey-db",
-        "plan": "starter"
-      }
-    ]
-  },
-  
-  "Dockerfile": "# Use Node.js 18 Alpine image for smaller size\nFROM node:18-alpine\n\n# Install Chrome dependencies for WhatsApp Web\nRUN apk add --no-cache \\\n    chromium \\\n    nss \\\n    freetype \\\n    freetype-dev \\\n    harfbuzz \\\n    ca-certificates \\\n    ttf-freefont\n\n# Set Chrome executable path\nENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true\nENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser\n\n# Create app directory\nWORKDIR /app\n\n# Copy package files\nCOPY package*.json ./\n\n# Install dependencies\nRUN npm ci --only=production\n\n# Copy app source\nCOPY . .\n\n# Create directory for WhatsApp session data\nRUN mkdir -p .wwebjs_auth\n\n# Expose port\nEXPOSE 3000\n\n# Health check\nHEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \\\n    CMD curl -f http://localhost:3000/health || exit 1\n\n# Start the application\nCMD [\"npm\", \"start\"]",
-  
-  ".env.example": "# Environment Variables for WhatsApp Survey Platform\n\n# Server Configuration\nPORT=3000\nNODE_ENV=development\nSESSION_SECRET=your-session-secret-here\n\n# Database Configuration (PostgreSQL)\nDATABASE_URL=postgresql://username:password@localhost:5432/whatsapp_survey_db\n\n# WhatsApp Configuration\nWHATSAPP_SESSION_NAME=whatsapp-survey-session\n\n# OpenAI Configuration (Required for Voice Transcription)\nOPENAI_API_KEY=sk-your-openai-api-key-here\n\n# Security\nRATE_LIMIT_WINDOW_MS=900000\nRATE_LIMIT_MAX_REQUESTS=100\n\n# Admin Configuration\nADMIN_USERNAME=admin\nADMIN_PASSWORD=secure-password-here\n\n# Voice Processing Configuration\nMAX_VOICE_DURATION_SECONDS=60\nVOICE_PROCESSING_TIMEOUT_MS=30000",
-  
-  "database.sql": "-- PostgreSQL Database Schema for WhatsApp Survey Platform\n\n-- Create database (run this separately)\n-- CREATE DATABASE whatsapp_survey_db;\n\n-- Surveys table\nCREATE TABLE surveys (\n    id SERIAL PRIMARY KEY,\n    title VARCHAR(255) NOT NULL,\n    estimated_time VARCHAR(50) DEFAULT '3-5 minutes',\n    is_active BOOLEAN DEFAULT FALSE,\n    participants INTEGER DEFAULT 0,\n    responses INTEGER DEFAULT 0,\n    questions JSONB NOT NULL,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Survey responses table\nCREATE TABLE survey_responses (\n    id SERIAL PRIMARY KEY,\n    survey_id INTEGER REFERENCES surveys(id) ON DELETE CASCADE,\n    phone_number VARCHAR(50) NOT NULL,\n    question_id VARCHAR(50) NOT NULL,\n    question_text TEXT NOT NULL,\n    answer TEXT NOT NULL,\n    follow_up TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\n-- User sessions table for WhatsApp conversations\nCREATE TABLE user_sessions (\n    id SERIAL PRIMARY KEY,\n    phone_number VARCHAR(50) UNIQUE NOT NULL,\n    survey_id INTEGER REFERENCES surveys(id) ON DELETE CASCADE,\n    current_question INTEGER DEFAULT 0,\n    stage VARCHAR(20) DEFAULT 'initial',\n    session_data JSONB,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Indexes for better performance\nCREATE INDEX idx_surveys_active ON surveys(is_active);\nCREATE INDEX idx_responses_survey_id ON survey_responses(survey_id);\nCREATE INDEX idx_responses_phone ON survey_responses(phone_number);\nCREATE INDEX idx_sessions_phone ON user_sessions(phone_number);\nCREATE INDEX idx_responses_created_at ON survey_responses(created_at);\n\n-- Function to update updated_at timestamp\nCREATE OR REPLACE FUNCTION update_updated_at_column()\nRETURNS TRIGGER AS $$\nBEGIN\n    NEW.updated_at = CURRENT_TIMESTAMP;\n    RETURN NEW;\nEND;\n$$ language 'plpgsql';\n\n-- Triggers for updated_at\nCREATE TRIGGER update_surveys_updated_at BEFORE UPDATE ON surveys\n    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();\n\nCREATE TRIGGER update_user_sessions_updated_at BEFORE UPDATE ON user_sessions\n    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();\n\n-- Sample data (optional)\nINSERT INTO surveys (title, estimated_time, questions, is_active) VALUES \n(\n    'Customer Satisfaction Survey',\n    '2-3 minutes',\n    '[\n        {\n            \"id\": 1,\n            \"type\": \"likert\",\n            \"question\": \"How satisfied are you with our service?\",\n            \"scale\": {\"min\": 1, \"max\": 5, \"labels\": [\"Very Dissatisfied\", \"Very Satisfied\"]}\n        },\n        {\n            \"id\": 2,\n            \"type\": \"multiple\",\n            \"question\": \"What could we improve?\",\n            \"options\": [\"Response time\", \"Product quality\", \"Customer support\", \"Pricing\", \"Other\"]\n        },\n        {\n            \"id\": 3,\n            \"type\": \"curated\",\n            \"question\": \"Would you recommend us to others?\",\n            \"options\": [\"Yes\", \"No\", \"Maybe\"]\n        }\n    ]'::jsonb,\n    true\n);",
-  
-  "public/index.html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>WhatsApp Survey Platform - Admin Dashboard</title>\n    <script src=\"https://unpkg.com/react@18/umd/react.development.js\"></script>\n    <script src=\"https://unpkg.com/react-dom@18/umd/react-dom.development.js\"></script>\n    <script src=\"https://unpkg.com/@babel/standalone/babel.min.js\"></script>\n    <script src=\"https://unpkg.com/recharts@2.8.0/umd/Recharts.js\"></script>\n    <script src=\"https://unpkg.com/socket.io-client@4.7.2/dist/socket.io.min.js\"></script>\n    <script src=\"https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js\"></script>\n    <script src=\"https://cdn.tailwindcss.com\"></script>\n    <style>\n        body {\n            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n            margin: 0;\n            padding: 0;\n            background-color: #f9fafb;\n        }\n        .loading {\n            display: flex;\n            justify-content: center;\n            align-items: center;\n            height: 100vh;\n            font-size: 18px;\n            color: #6b7280;\n        }\n        .error {\n            color: #ef4444;\n            text-align: center;\n            padding: 20px;\n        }\n    </style>\n</head>\n<body>\n    <div id=\"root\">\n        <div class=\"loading\">\n            <div>Loading WhatsApp Survey Platform...</div>\n        </div>\n    </div>\n    \n    <script type=\"text/babel\">\n        const { useState, useEffect } = React;\n        const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;\n        \n        // Your React component code would go here\n        // For now, showing a simple dashboard\n        \n        const Dashboard = () => {\n            const [status, setStatus] = useState('loading');\n            \n            useEffect(() => {\n                // Check if server is responding\n                fetch('/health')\n                    .then(response => response.json())\n                    .then(data => {\n                        setStatus('ready');\n                    })\n                    .catch(error => {\n                        setStatus('error');\n                    });\n            }, []);\n            \n            if (status === 'loading') {\n                return (\n                    <div className=\"loading\">\n                        <div>Connecting to WhatsApp Survey Platform...</div>\n                    </div>\n                );\n            }\n            \n            if (status === 'error') {\n                return (\n                    <div className=\"error\">\n                        <h2>Connection Error</h2>\n                        <p>Unable to connect to the survey platform. Please check your server configuration.</p>\n                    </div>\n                );\n            }\n            \n            return (\n                <div className=\"min-h-screen bg-gray-50 p-6\">\n                    <div className=\"max-w-7xl mx-auto\">\n                        <div className=\"mb-8\">\n                            <h1 className=\"text-3xl font-bold text-gray-800 mb-2\">WhatsApp Survey Platform</h1>\n                            <p className=\"text-gray-600\">Admin Dashboard - Manage surveys and analyze responses</p>\n                        </div>\n                        \n                        <div className=\"bg-white rounded-xl shadow-lg p-6\">\n                            <div className=\"text-center py-12\">\n                                <div className=\"text-6xl mb-4\">📱</div>\n                                <h2 className=\"text-2xl font-bold text-gray-800 mb-4\">Platform is Ready!</h2>\n                                <p className=\"text-gray-600 mb-6\">Your WhatsApp Survey Platform is successfully deployed and running.</p>\n                                \n                                <div className=\"grid grid-cols-1 md:grid-cols-3 gap-4 mb-8\">\n                                    <div className=\"bg-blue-50 rounded-lg p-4\">\n                                        <h3 className=\"font-semibold text-blue-800 mb-2\">📊 Real-time Analytics</h3>\n                                        <p className=\"text-sm text-blue-600\">Track survey responses as they come in</p>\n                                    </div>\n                                    <div className=\"bg-green-50 rounded-lg p-4\">\n                                        <h3 className=\"font-semibold text-green-800 mb-2\">🤖 WhatsApp Bot</h3>\n                                        <p className=\"text-sm text-green-600\">Automated survey conversations</p>\n                                    </div>\n                                    <div className=\"bg-purple-50 rounded-lg p-4\">\n                                        <h3 className=\"font-semibold text-purple-800 mb-2\">📈 Data Export</h3>\n                                        <p className=\"text-sm text-purple-600\">Export responses to CSV/Excel</p>\n                                    </div>\n                                </div>\n                                \n                                <div className=\"bg-yellow-50 border border-yellow-200 rounded-lg p-4\">\n                                    <h4 className=\"font-semibold text-yellow-800 mb-2\">Next Steps:</h4>\n                                    <ol className=\"text-sm text-yellow-700 text-left max-w-md mx-auto\">\n                                        <li>1. Connect your WhatsApp account by scanning the QR code</li>\n                                        <li>2. Create your first survey using the admin interface</li>\n                                        <li>3. Activate the survey to start receiving responses</li>\n                                        <li>4. Monitor real-time analytics and export data</li>\n                                    </ol>\n                                </div>\n                            </div>\n                        </div>\n                    </div>\n                </div>\n            );\n        };\n        \n        ReactDOM.render(<Dashboard />, document.getElementById('root'));\n    </script>\n</body>\n</html>",
-  
-  "README.md": "# WhatsApp Survey Platform\n\nA comprehensive survey platform that allows participants to respond via WhatsApp Bot with real-time analytics dashboard for administrators.\n\n## Features\n\n### For Participants (WhatsApp)\n- 📱 **WhatsApp Integration**: Participants respond via familiar WhatsApp interface\n- 🎤 **Voice Message Support**: Advanced voice transcription with OpenAI Whisper API\n- 🌍 **Multi-language Support**: Automatic language detection and translation to English\n- 🧠 **Smart Validation**: AI-powered validation to detect meaningful responses\n- 📊 **Multiple Question Types**: Multiple choice, Likert scale, Agree/Disagree, text responses\n- 🔄 **Conversational Flow**: Natural conversation flow with follow-up questions\n- ✅ **Response Confirmation**: Voice transcription confirmation before saving\n- ⚡ **Real-time Responses**: Immediate feedback and progress tracking\n\n### For Administrators (Web Dashboard)\n- 📈 **Real-time Analytics**: Live dashboard with response visualization\n- 🎯 **Survey Management**: Create, edit, activate, and manage surveys\n- 📊 **Data Visualization**: Charts, graphs, and response distribution analysis\n- 📤 **Data Export**: Export responses to CSV/Excel formats\n- 🔌 **WhatsApp Connection**: QR code setup for WhatsApp Web integration\n- 📱 **Mobile Responsive**: Works on desktop, tablet, and mobile devices\n\n## Technology Stack\n\n### Backend\n- **Node.js & Express**: Server framework\n- **WhatsApp Web.js**: WhatsApp integration\n- **Socket.io**: Real-time communication\n- **PostgreSQL**: Database for survey data\n- **QR Code**: WhatsApp authentication\n\n### Frontend\n- **React**: Admin dashboard UI\n- **Recharts**: Data visualization\n- **Tailwind CSS**: Styling\n- **Socket.io Client**: Real-time updates\n\n### Deployment\n- **Render**: Cloud hosting platform\n- **Docker**: Containerization\n- **PostgreSQL**: Managed database\n\n## Quick Start\n\n### 1. Clone Repository\n```bash\ngit clone https://github.com/yourusername/whatsapp-survey-platform.git\ncd whatsapp-survey-platform\n```\n\n### 2. Install Dependencies\n```bash\nnpm install\n```\n\n### 3. Environment Setup\n```bash\ncp .env.example .env\n# Edit .env with your configuration\n```\n\n### 4. Database Setup\n```bash\n# Create PostgreSQL database\npsql -U postgres -c \"CREATE DATABASE whatsapp_survey_db;\"\n\n# Run database migrations\npsql -U postgres -d whatsapp_survey_db -f database.sql\n```\n\n### 5. Start Development Server\n```bash\nnpm run dev\n```\n\n### 6. Connect WhatsApp\n1. Open http://localhost:3000 in your browser\n2. Scan the QR code with WhatsApp on your phone\n3. WhatsApp Bot is now ready to receive survey responses!\n\n## Deployment on Render\n\n### Option 1: Deploy with render.yaml\n1. Fork this repository\n2. Connect your GitHub account to Render\n3. Create a new Web Service from your forked repository\n4. Render will automatically detect and use the `render.yaml` configuration\n\n### Option 2: Manual Deployment\n1. Create a new Web Service on Render\n2. Connect your GitHub repository\n3. Set the following:\n   - **Build Command**: `npm install`\n   - **Start Command**: `npm start`\n   - **Environment Variables**: Copy from `.env.example`\n4. Create a PostgreSQL database and connect it\n5. Deploy!\n\n### Environment Variables for Render\n```\nNODE_ENV=production\nPORT=10000\nDATABASE_URL=postgresql://...\nSESSION_SECRET=your-secret-key\nWHATSAPP_SESSION_NAME=whatsapp-survey-session\nOPENAI_API_KEY=sk-your-openai-api-key-here\nMAX_VOICE_DURATION_SECONDS=60\nVOICE_PROCESSING_TIMEOUT_MS=30000\n```\n\n## Voice Transcription Features\n\n### Advanced Voice Processing\n- **OpenAI Whisper Integration**: Professional-grade voice transcription\n- **Automatic Language Detection**: Supports 99+ languages with automatic detection\n- **Smart Translation**: Automatically translates non-English responses to English\n- **Response Validation**: AI-powered validation to ensure meaningful responses\n- **Confirmation Flow**: Users confirm transcription accuracy before saving\n\n### Voice Message Flow\n1. **Participant sends voice message** for follow-up questions\n2. **System processes audio** with OpenAI Whisper API\n3. **Language detection** and translation (if needed)\n4. **Response validation** to ensure meaningful content\n5. **Confirmation request** sent to participant\n6. **Final storage** after user confirmation\n\n### Error Handling\n- **Gibberish Detection**: Identifies and rejects meaningless audio\n- **Audio Quality Issues**: Prompts user to re-record if unclear\n- **API Failures**: Graceful fallback with user-friendly messages\n- **Timeout Handling**: Automatic retry mechanisms\n\n### Supported Languages\n- **Auto-detection**: Automatically detects spoken language\n- **Translation**: Translates to English for consistent analysis\n- **Multilingual Support**: Works with 99+ languages supported by Whisper\n- **Language Metadata**: Stores original language information\n\n## Security Configuration\n\n### Environment Variables Setup\n\n**CRITICAL: Never commit API keys to your repository!**\n\n#### For Local Development\n1. **Copy environment template**:\n   ```bash\n   cp .env.example .env\n   ```\n\n2. **Set your OpenAI API key**:\n   ```env\n   OPENAI_API_KEY=sk-your-actual-api-key-here\n   ```\n\n3. **Add .env to .gitignore**:\n   ```bash\n   echo \".env\" >> .gitignore\n   ```\n\n#### For Render Deployment\n1. **In Render Dashboard**:\n   - Go to your service settings\n   - Navigate to \"Environment\" tab\n   - Add environment variables:\n\n   ```\n   OPENAI_API_KEY=sk-your-actual-api-key-here\n   NODE_ENV=production\n   SESSION_SECRET=your-secure-random-string\n   MAX_VOICE_DURATION_SECONDS=60\n   VOICE_PROCESSING_TIMEOUT_MS=30000\n   ```\n\n2. **Security Best Practices**:\n   - ✅ Use Render's environment variable interface\n   - ✅ Never put API keys in render.yaml\n   - ✅ Use different API keys for development/production\n   - ✅ Regularly rotate your API keys\n   - ✅ Monitor API usage and set billing limits\n\n### OpenAI API Key Security\n\n#### Getting Your API Key\n1. **Visit OpenAI Platform**: https://platform.openai.com/api-keys\n2. **Create new secret key** with appropriate permissions\n3. **Copy the key immediately** (you won't see it again)\n4. **Set billing limits** to control costs\n\n#### Key Management\n- 🔒 **Store securely**: Only in environment variables\n- 🔄 **Rotate regularly**: Update keys periodically\n- 📊 **Monitor usage**: Track API calls and costs\n- 🚫 **Never share**: Don't include in code or logs\n\n#### API Key Validation\nThe application includes built-in validation:\n- ✅ Checks API key format (starts with 'sk-')\n- ✅ Validates key length\n- ✅ Tests connection on startup\n- ✅ Graceful fallback when key is invalid\n\n### Runtime Security Features\n\n#### Automatic Safeguards\n- **Environment Validation**: Checks for required variables on startup\n- **API Key Verification**: Validates OpenAI key format and connectivity\n- **Graceful Degradation**: App works without voice features if key missing\n- **Error Logging**: Secure logging without exposing sensitive data\n\n#### Voice Processing Security\n- **File Size Limits**: Prevents oversized uploads\n- **Timeout Protection**: Prevents hanging requests\n- **Content Validation**: AI-powered response validation\n- **Rate Limiting**: Protects against API abuse\n\n## Usage Guide\n\n### Creating Surveys\n1. **Access Admin Dashboard**: Navigate to your deployed URL\n2. **Create Survey**: Click \"Create Survey\" and add questions\n3. **Question Types Available**:\n   - **Agree/Disagree/Undecided**: Quick opinion polls\n   - **Multiple Choice**: Select from predefined options\n   - **Rating Scale**: Likert scale (1-5, 1-10, etc.)\n   - **Text Answer**: Open-ended responses\n4. **Activate Survey**: Make it live for participants\n\n### WhatsApp Interaction Flow\n1. **Participant starts conversation** with your WhatsApp number\n2. **Bot sends welcome message** and first question\n3. **Participant responds** with their choice/answer\n4. **Bot asks follow-up** \"Why did you choose that?\"\n5. **Process continues** through all questions\n6. **Survey completion** message sent\n\n### Analytics Dashboard\n- **Real-time Updates**: See responses as they come in\n- **Response Distribution**: Visual charts for each question\n- **Follow-up Analysis**: Word clouds and insights from comments\n- **Export Data**: Download full response data\n\n## API Endpoints\n\n### Survey Management\n- `GET /api/surveys` - List all surveys\n- `POST /api/surveys` - Create new survey\n- `POST /api/surveys/:id/activate` - Activate survey\n- `GET /api/surveys/:id/responses` - Get survey responses\n- `GET /api/surveys/:id/analytics` - Get survey analytics\n- `GET /api/surveys/:id/export` - Export survey data\n\n### WhatsApp Integration\n- `GET /api/whatsapp/status` - Check WhatsApp connection status\n- WebSocket events for real-time updates\n\n## Database Schema\n\n### Tables\n- **surveys**: Survey definitions and metadata\n- **survey_responses**: Individual question responses\n- **user_sessions**: WhatsApp conversation state management\n\n### Key Features\n- **JSONB fields** for flexible question/response storage\n- **Indexes** for performance optimization\n- **Triggers** for automatic timestamp updates\n- **Foreign keys** for data integrity\n\n## Customization\n\n### Adding New Question Types\n1. Update the question schema in `database.sql`\n2. Add handling logic in `handleSurveyResponse()`\n3. Update the admin dashboard UI\n4. Add analytics visualization\n\n### Styling Customization\n- **Tailwind CSS**: Modify classes in React components\n- **Custom CSS**: Add to `public/index.html`\n- **Color Schemes**: Update Tailwind configuration\n\n### WhatsApp Message Customization\n- **Welcome Messages**: Edit in `handleInitialMessage()`\n- **Question Formatting**: Modify `sendCurrentQuestion()`\n- **Completion Messages**: Update in `handleFollowUpResponse()`\n\n## Troubleshooting\n\n### Common Issues\n\n**WhatsApp Not Connecting**\n- Ensure QR code is scanned correctly\n- Check if WhatsApp Web is accessible\n- Verify internet connection\n\n**Database Connection Errors**\n- Check DATABASE_URL environment variable\n- Ensure PostgreSQL is running\n- Verify database permissions\n\n**Survey Responses Not Appearing**\n- Check WebSocket connection\n- Verify survey is activated\n- Check browser console for errors\n\n### Performance Optimization\n- **Database Indexing**: Already included for key queries\n- **Connection Pooling**: Configure for high traffic\n- **Caching**: Add Redis for session management\n- **Rate Limiting**: Included for API protection\n\n## Contributing\n\n1. Fork the repository\n2. Create a feature branch\n3. Make your changes\n4. Add tests if applicable\n5. Submit a pull request\n\n## License\n\nMIT License - see LICENSE file for details\n\n## Support\n\nFor issues and questions:\n- Create an issue on GitHub\n- Check the troubleshooting guide\n- Review the API documentation\n\n---\n\n**Built with ❤️ for better survey experiences through WhatsApp**"
-}
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-size: 18px;
+            color: #6b7280;
+        }
+        .error {
+            color: #ef4444;
+            text-align: center;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div class="loading">
+            <div>Loading WhatsApp Survey Platform...</div>
+        </div>
+    </div>
+    
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+        
+        const Dashboard = () => {
+            const [status, setStatus] = useState('loading');
+            const [whatsappStatus, setWhatsappStatus] = useState({ isReady: false, qrCode: null });
+            const [openaiStatus, setOpenaiStatus] = useState({ isConfigured: false, voiceTranscriptionEnabled: false });
+            
+            useEffect(() => {
+                // Check if server is responding
+                fetch('/health')
+                    .then(response => response.json())
+                    .then(data => {
+                        setStatus('ready');
+                        fetchStatuses();
+                    })
+                    .catch(error => {
+                        setStatus('error');
+                    });
+            }, []);
+            
+            const fetchStatuses = async () => {
+                try {
+                    const [whatsappResponse, openaiResponse] = await Promise.all([
+                        fetch('/api/whatsapp/status'),
+                        fetch('/api/openai/status')
+                    ]);
+                    
+                    const whatsappData = await whatsappResponse.json();
+                    const openaiData = await openaiResponse.json();
+                    
+                    setWhatsappStatus(whatsappData);
+                    setOpenaiStatus(openaiData);
+                } catch (error) {
+                    console.error('Error fetching statuses:', error);
+                }
+            };
+            
+            const testOpenAI = async () => {
+                try {
+                    const response = await fetch('/api/openai/test', { method: 'POST' });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        alert('✅ OpenAI connection successful! Voice transcription is working.');
+                        fetchStatuses();
+                    } else {
+                        alert(`❌ OpenAI connection failed: ${data.message}`);
+                    }
+                } catch (error) {
+                    alert('❌ Failed to test OpenAI connection. Please check your configuration.');
+                }
+            };
+            
+            if (status === 'loading') {
+                return (
+                    <div className="loading">
+                        <div>Connecting to WhatsApp Survey Platform...</div>
+                    </div>
+                );
+            }
+            
+            if (status === 'error') {
+                return (
+                    <div className="error">
+                        <h2>Connection Error</h2>
+                        <p>Unable to connect to the survey platform. Please check your server configuration.</p>
+                    </div>
+                );
+            }
+            
+            return (
+                <div className="min-h-screen bg-gray-50 p-6">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="mb-8">
+                            <h1 className="text-3xl font-bold text-gray-800 mb-2">WhatsApp Survey Platform</h1>
+                            <p className="text-gray-600">Admin Dashboard - Manage surveys and analyze responses</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                            {/* WhatsApp Status */}
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h2 className="text-xl font-bold text-gray-800">WhatsApp Connection</h2>
+                                    <div className="flex items-center space-x-2">
+                                        {whatsappStatus.isReady ? (
+                                            <>
+                                                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                                                <span className="text-green-600 font-medium">Connected</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                                                <span className="text-red-600 font-medium">Disconnected</span>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {whatsappStatus.qrCode && (
+                                    <div className="text-center">
+                                        <p className="text-gray-600 mb-4">Scan this QR code with WhatsApp to connect:</p>
+                                        <div className="flex justify-center">
+                                            <img src={whatsappStatus.qrCode} alt="WhatsApp QR Code" className="max-w-xs rounded-lg" />
+                                        </div>
+                                    </div>
+                                )}
+
+                                {whatsappStatus.isReady && (
+                                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                        <div className="flex items-center space-x-2">
+                                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                                            <span className="text-green-800">WhatsApp Bot is ready to receive messages!</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {/* OpenAI Status */}
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h2 className="text-xl font-bold text-gray-800">AI Voice Features</h2>
+                                    <div className="flex items-center space-x-2">
+                                        {openaiStatus.isConfigured ? (
+                                            <>
+                                                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                                                <span className="text-green-600 font-medium">Enabled</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                                                <span className="text-red-600 font-medium">Disabled</span>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {openaiStatus.isConfigured ? (
+                                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <span className="text-green-800 font-medium">✅ Voice transcription enabled</span>
+                                            <button
+                                                onClick={testOpenAI}
+                                                className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                                            >
+                                                Test Connection
+                                            </button>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4 text-sm">
+                                            <div className="space-y-2">
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-green-600">🎤</span>
+                                                    <span className="text-green-700">Voice Transcription</span>
+                                                </div>
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-green-600">🌍</span>
+                                                    <span className="text-green-700">Language Detection</span>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-green-600">🔄</span>
+                                                    <span className="text-green-700">Auto Translation</span>
+                                                </div>
+                                                <div className="flex items-center space-x-2">
+                                                    <span className="text-green-600">🧠</span>
+                                                    <span className="text-green-700">Response Validation</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                        <div className="flex items-start space-x-3">
+                                            <div className="text-yellow-500 mt-1">⚠️</div>
+                                            <div>
+                                                <p className="text-yellow-800 font-medium mb-2">Voice transcription not configured</p>
+                                                <p className="text-yellow-700 text-sm mb-3">
+                                                    To enable voice message transcription, you need to set the OPENAI_API_KEY environment variable.
+                                                </p>
+                                                <div className="text-xs text-yellow-600 space-y-1">
+                                                    <p>🔹 Get your API key from OpenAI Platform</p>
+                                                    <p>🔹 Set OPENAI_API_KEY in your environment variables</p>
+                                                    <p>🔹 Restart the application</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <div className="text-center py-12">
+                                <div className="text-6xl mb-4">📱</div>
+                                <h2 className="text-2xl font-bold text-gray-800 mb-4">Platform is Ready!</h2>
+                                <p className="text-gray-600 mb-6">Your WhatsApp Survey Platform is successfully deployed and running.</p>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                                    <div className="bg-blue-50 rounded-lg p-4">
+                                        <h3 className="font-semibold text-blue-800 mb-2">📊 Real-time Analytics</h3>
+                                        <p className="text-sm text-blue-600">Track survey responses as they come in</p>
+                                    </div>
+                                    <div className="bg-green-50 rounded-lg p-4">
+                                        <h3 className="font-semibold text-green-800 mb-2">🤖 WhatsApp Bot</h3>
+                                        <p className="text-sm text-green-600">Automated survey conversations</p>
+                                    </div>
+                                    <div className="bg-purple-50 rounded-lg p-4">
+                                        <h3 className="font-semibold text-purple-800 mb-2">📈 Data Export</h3>
+                                        <p className="text-sm text-purple-600">Export responses to CSV/Excel</p>
+                                    </div>
+                                </div>
+                                
+                                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                    <h4 className="font-semibold text-yellow-800 mb-2">Next Steps:</h4>
+                                    <ol className="text-sm text-yellow-700 text-left max-w-md mx-auto">
+                                        <li>1. Connect your WhatsApp account by scanning the QR code</li>
+                                        <li>2. Create your first survey using the admin interface</li>
+                                        <li>3. Activate the survey to start receiving responses</li>
+                                        <li>4. Monitor real-time analytics and export data</li>
+                                    </ol>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        ReactDOM.render(<Dashboard />, document.getElementById('root'));
+    </script>
+</body>
+</html>
