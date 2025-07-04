@@ -1,4 +1,3 @@
-// server.js - WhatsApp Survey Platform Backend
 require('dotenv').config(); // Load environment variables first
 
 const express = require('express');
@@ -26,20 +25,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// In-memory storage (replace with PostgreSQL in production)
-let surveys = [];
-let responses = [];
-let activeSurveys = new Map();
-let userSessions = new Map();
-let connectedClients = new Set();
-
 // Security and Environment Configuration
 const requiredEnvVars = ['OPENAI_API_KEY'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
-  console.warn('⚠️  WARNING: Missing required environment variables:', missingEnvVars.join(', '));
-  console.warn('⚠️  Voice transcription features will be disabled without OPENAI_API_KEY');
+  console.warn('Warning: Missing required environment variables:', missingEnvVars.join(', '));
+  console.warn('Warning: Voice transcription features will be disabled without OPENAI_API_KEY');
 }
 
 // OpenAI configuration - SECURED with environment variables
@@ -62,9 +54,16 @@ function validateOpenAIKey(apiKey) {
 const isOpenAIConfigured = validateOpenAIKey(OPENAI_API_KEY);
 
 if (!isOpenAIConfigured) {
-  console.warn('🔒 OpenAI API key not configured or invalid. Voice transcription disabled.');
-  console.warn('💡 Set OPENAI_API_KEY environment variable to enable voice features.');
+  console.warn('OpenAI API key not configured or invalid. Voice transcription disabled.');
+  console.warn('Set OPENAI_API_KEY environment variable to enable voice features.');
 }
+
+// In-memory storage (replace with PostgreSQL in production)
+let surveys = [];
+let responses = [];
+let activeSurveys = new Map();
+let userSessions = new Map();
+let connectedClients = new Set();
 
 // Voice message processing functions
 async function transcribeVoiceMessage(audioBuffer, fileName) {
@@ -366,7 +365,10 @@ function getActiveSurvey() {
 // WhatsApp message handling
 async function handleWhatsAppMessage(message) {
   const phoneNumber = message.from;
-  const messageText = message.body.toLowerCase().trim();
+  const isVoiceMessage = message.type === 'ptt' || message.type === 'audio';
+  const messageText = isVoiceMessage ? '[Voice Message]' : message.body.toLowerCase().trim();
+  
+  console.log(`Received ${isVoiceMessage ? 'voice' : 'text'} message from ${phoneNumber}`);
   
   // Get or create user session
   let session = userSessions.get(phoneNumber);
@@ -376,7 +378,8 @@ async function handleWhatsAppMessage(message) {
       currentQuestion: 0,
       responses: [],
       surveyId: null,
-      stage: 'initial'
+      stage: 'initial',
+      pendingVoiceValidation: null
     };
     userSessions.set(phoneNumber, session);
   }
@@ -385,7 +388,7 @@ async function handleWhatsAppMessage(message) {
   
   if (!activeSurvey) {
     await client.sendMessage(phoneNumber, 
-      "Hello! 👋 There's no active survey at the moment. Please check back later!"
+      "Hello! There's no active survey at the moment. Please check back later!"
     );
     return;
   }
@@ -396,10 +399,13 @@ async function handleWhatsAppMessage(message) {
       await handleInitialMessage(phoneNumber, session, activeSurvey);
       break;
     case 'survey':
-      await handleSurveyResponse(phoneNumber, session, activeSurvey, messageText);
+      await handleSurveyResponse(phoneNumber, session, activeSurvey, messageText, isVoiceMessage, message);
       break;
     case 'followup':
-      await handleFollowUpResponse(phoneNumber, session, activeSurvey, messageText);
+      await handleFollowUpResponse(phoneNumber, session, activeSurvey, messageText, isVoiceMessage, message);
+      break;
+    case 'voice_confirmation':
+      await handleVoiceConfirmation(phoneNumber, session, activeSurvey, messageText);
       break;
   }
 }
@@ -464,7 +470,7 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
   // Handle voice messages for survey responses (usually not needed for multiple choice)
   if (isVoiceMessage) {
     await client.sendMessage(phoneNumber, 
-      "I received your voice message! 🎵 For survey questions, please respond with the number of your choice or type your answer. You can use voice messages for follow-up explanations! 😊"
+      "I received your voice message! For survey questions, please respond with the number of your choice or type your answer. You can use voice messages for follow-up explanations!"
     );
     return;
   }
@@ -496,7 +502,7 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
 
   if (!isValidAnswer) {
     await client.sendMessage(phoneNumber, 
-      "Sorry, I didn't understand that. Please try again with a valid option. 🤔"
+      "Sorry, I didn't understand that. Please try again with a valid option."
     );
     return;
   }
@@ -516,27 +522,19 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
 
   // Ask for follow-up
   session.stage = 'followup';
-  await client.sendMessage(phoneNumber, 
-    `Great! 👍 Could you tell me why you chose that answer? 
-
-You can:
-🎤 Send a voice message (I'll transcribe it)
-💬 Type your response
-⏭️ Type 'skip' to continue
-
-I'd love to hear your thoughts!`
-  );
+  const followUpMessage = `Great! Could you tell me why you chose that answer?\n\nYou can:\n🎤 Send a voice message (I'll transcribe it)\n💬 Type your response\n⏭️ Type 'skip' to continue\n\nI'd love to hear your thoughts!`;
+  
+  await client.sendMessage(phoneNumber, followUpMessage);
 }
 
 async function handleFollowUpResponse(phoneNumber, session, survey, messageText, isVoiceMessage, message) {
   let followUpText = '';
-  let processingVoice = false;
 
   if (isVoiceMessage) {
     // Check if voice transcription is available
     if (!isOpenAIConfigured) {
       await client.sendMessage(phoneNumber, 
-        "🎤 I received your voice message, but voice transcription is not available right now. 😔\n\nCould you please type your response instead? Or type 'skip' to continue."
+        "I received your voice message, but voice transcription is not available right now. Could you please type your response instead? Or type 'skip' to continue."
       );
       return;
     }
@@ -544,9 +542,8 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
     try {
       // Show processing message
       await client.sendMessage(phoneNumber, 
-        "🎵 Processing your voice message... This may take a moment!"
+        "Processing your voice message... This may take a moment!"
       );
-      processingVoice = true;
 
       // Download and process voice message
       const media = await message.downloadMedia();
@@ -555,7 +552,7 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
       // Check voice duration (basic validation)
       if (audioBuffer.length > MAX_VOICE_DURATION * 1024 * 1024) { // Rough size check
         await client.sendMessage(phoneNumber, 
-          `🎤 Voice message is too long. Please keep it under ${MAX_VOICE_DURATION} seconds and try again.`
+          `Voice message is too long. Please keep it under ${MAX_VOICE_DURATION} seconds and try again.`
         );
         return;
       }
@@ -571,16 +568,9 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
       const validation = await validateResponse(translatedText, question.question, question.type);
       
       if (!validation.isValid) {
-        await client.sendMessage(phoneNumber, 
-          `🤔 I'm having trouble understanding your voice message. ${validation.reason}
-
-Could you please:
-🎤 Try recording again more clearly
-💬 Type your response instead
-⏭️ Type 'skip' to continue
-
-I want to make sure I capture your thoughts accurately!`
-        );
+        const tryAgainMessage = `I'm having trouble understanding your voice message. ${validation.reason}\n\nCould you please:\n🎤 Try recording again more clearly\n💬 Type your response instead\n⏭️ Type 'skip' to continue\n\nI want to make sure I capture your thoughts accurately!`;
+        
+        await client.sendMessage(phoneNumber, tryAgainMessage);
         return;
       }
 
@@ -599,18 +589,13 @@ I want to make sure I capture your thoughts accurately!`
       // Ask for confirmation
       session.stage = 'voice_confirmation';
       
-      let confirmationMessage = `🎤 Voice message received! Here's what I understood:
-
-"${summary}"`;
+      let confirmationMessage = `Voice message received! Here's what I understood:\n\n"${summary}"`;
       
       if (transcription.language !== 'en') {
-        confirmationMessage += `\n\n🌍 Detected language: ${transcription.language}`;
+        confirmationMessage += `\n\nDetected language: ${transcription.language}`;
       }
       
-      confirmationMessage += `\n\nIs this correct?
-✅ Type 'yes' to confirm
-❌ Type 'no' to try again
-⏭️ Type 'skip' to continue without this response`;
+      confirmationMessage += `\n\nIs this correct?\n✅ Type 'yes' to confirm\n❌ Type 'no' to try again\n⏭️ Type 'skip' to continue without this response`;
       
       await client.sendMessage(phoneNumber, confirmationMessage);
       return;
@@ -619,14 +604,14 @@ I want to make sure I capture your thoughts accurately!`
       console.error('Voice processing error:', error);
       
       // Specific error messages based on error type
-      let errorMessage = "Sorry, I couldn't process your voice message. 😔";
+      let errorMessage = "Sorry, I couldn't process your voice message.";
       
       if (error.message.includes('API key')) {
-        errorMessage = "Voice transcription service is temporarily unavailable. 🔧";
+        errorMessage = "Voice transcription service is temporarily unavailable.";
       } else if (error.message.includes('timeout')) {
-        errorMessage = "Voice processing timed out. Please try a shorter message. ⏱️";
+        errorMessage = "Voice processing timed out. Please try a shorter message.";
       } else if (error.message.includes('rate limit')) {
-        errorMessage = "Too many requests. Please wait a moment and try again. 🚦";
+        errorMessage = "Too many requests. Please wait a moment and try again.";
       }
       
       errorMessage += "\n\nPlease try again or type your response instead.";
@@ -646,34 +631,26 @@ I want to make sure I capture your thoughts accurately!`
 async function handleVoiceConfirmation(phoneNumber, session, survey, messageText) {
   const response = messageText.toLowerCase().trim();
   
-  if (response === 'yes' || response === 'y' || response === 'correct' || response === '✅') {
+  if (response === 'yes' || response === 'y' || response === 'correct') {
     // User confirmed the transcription
     const voiceData = session.pendingVoiceValidation;
     await processFollowUpResponse(phoneNumber, session, survey, voiceData.summary, voiceData);
-  } else if (response === 'no' || response === 'n' || response === 'incorrect' || response === '❌') {
+  } else if (response === 'no' || response === 'n' || response === 'incorrect') {
     // User rejected the transcription
     session.stage = 'followup';
     session.pendingVoiceValidation = null;
-    await client.sendMessage(phoneNumber, 
-      "No problem! Let's try again. 🔄
-
-You can:
-🎤 Send another voice message
-💬 Type your response
-⏭️ Type 'skip' to continue"
-    );
+    const retryMessage = "No problem! Let's try again.\n\nYou can:\n🎤 Send another voice message\n💬 Type your response\n⏭️ Type 'skip' to continue";
+    
+    await client.sendMessage(phoneNumber, retryMessage);
   } else if (response === 'skip') {
     // User wants to skip
     session.pendingVoiceValidation = null;
     await processFollowUpResponse(phoneNumber, session, survey, '');
   } else {
     // Invalid response
-    await client.sendMessage(phoneNumber, 
-      "Please respond with:
-✅ 'yes' to confirm
-❌ 'no' to try again  
-⏭️ 'skip' to continue"
-    );
+    const helpMessage = "Please respond with:\n✅ 'yes' to confirm\n❌ 'no' to try again\n⏭️ 'skip' to continue";
+    
+    await client.sendMessage(phoneNumber, helpMessage);
   }
 }
 
@@ -715,13 +692,9 @@ async function processFollowUpResponse(phoneNumber, session, survey, followUpTex
   
   if (session.currentQuestion >= survey.questions.length) {
     // Survey complete
-    await client.sendMessage(phoneNumber, 
-      `🎉 Thank you for completing the survey! 
-
-Your responses have been recorded, including your voice messages. Your feedback is valuable to us! 💙
-
-Have a great day! 😊`
-    );
+    const completionMessage = `Thank you for completing the survey!\n\nYour responses have been recorded, including your voice messages. Your feedback is valuable to us!\n\nHave a great day!`;
+    
+    await client.sendMessage(phoneNumber, completionMessage);
     
     // Update survey stats
     survey.responses++;
@@ -732,15 +705,9 @@ Have a great day! 😊`
   } else {
     // Next question
     const progress = Math.round((session.currentQuestion / survey.questions.length) * 100);
-    await client.sendMessage(phoneNumber, 
-      `✨ Thank you for sharing! 
-
-Progress: ${progress}% complete 📈
-
----
-
-Let's continue...`
-    );
+    const progressMessage = `Thank you for sharing!\n\nProgress: ${progress}% complete\n\n---\n\nLet's continue...`;
+    
+    await client.sendMessage(phoneNumber, progressMessage);
     
     await sendCurrentQuestion(phoneNumber, session, survey);
   }
