@@ -78,7 +78,7 @@
 
     <!-- Create Survey Modal -->
     <div id="create-survey-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-        <div class="bg-white rounded-xl shadow-xl p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="bg-white rounded-xl shadow-xl p-6 max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div class="flex items-center justify-between mb-6">
                 <h2 class="text-xl font-bold text-gray-800">Create New Survey</h2>
                 <button onclick="hideCreateSurvey()" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
@@ -124,8 +124,8 @@
                             </div>
                         </div>
 
-                        <div id="questions-container" class="space-y-3">
-                            <div class="text-center text-gray-500 py-4 border-2 border-dashed border-gray-300 rounded-lg">
+                        <div id="questions-container" class="space-y-4">
+                            <div class="text-center text-gray-500 py-8 border-2 border-dashed border-gray-300 rounded-lg">
                                 <p>No questions added yet. Click the buttons above to add questions.</p>
                             </div>
                         </div>
@@ -153,7 +153,7 @@
 
     <script>
         let surveys = [];
-        let questionCounter = 0;
+        let questions = [];
 
         // Load initial status
         async function loadStatus() {
@@ -224,48 +224,226 @@
         // Survey Management Functions
         function showCreateSurvey() {
             document.getElementById('create-survey-modal').classList.remove('hidden');
+            questions = []; // Reset questions array
+            renderQuestions();
         }
 
         function hideCreateSurvey() {
             document.getElementById('create-survey-modal').classList.add('hidden');
             document.getElementById('survey-form').reset();
-            document.getElementById('questions-container').innerHTML = `
-                <div class="text-center text-gray-500 py-4 border-2 border-dashed border-gray-300 rounded-lg">
-                    <p>No questions added yet. Click the buttons above to add questions.</p>
-                </div>
-            `;
-            questionCounter = 0;
+            questions = [];
+            renderQuestions();
         }
 
         function addQuestion(type) {
-            questionCounter++;
+            const question = {
+                id: Date.now(),
+                type: type,
+                question: '',
+                options: type === 'multiple' ? ['Option 1', 'Option 2'] : [],
+                scale: type === 'likert' ? { min: 1, max: 5, labels: ['Poor', 'Excellent'] } : null
+            };
+            
+            questions.push(question);
+            renderQuestions();
+        }
+
+        function removeQuestion(questionId) {
+            questions = questions.filter(q => q.id !== questionId);
+            renderQuestions();
+        }
+
+        function updateQuestion(questionId, field, value) {
+            const question = questions.find(q => q.id === questionId);
+            if (question) {
+                question[field] = value;
+            }
+        }
+
+        function addOption(questionId) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'multiple') {
+                question.options.push(`Option ${question.options.length + 1}`);
+                renderQuestions();
+            }
+        }
+
+        function removeOption(questionId, optionIndex) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'multiple' && question.options.length > 1) {
+                question.options.splice(optionIndex, 1);
+                renderQuestions();
+            }
+        }
+
+        function updateOption(questionId, optionIndex, value) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'multiple') {
+                question.options[optionIndex] = value;
+            }
+        }
+
+        function updateScale(questionId, field, value) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'likert') {
+                if (field === 'min' || field === 'max') {
+                    question.scale[field] = parseInt(value);
+                } else {
+                    question.scale[field] = value;
+                }
+            }
+        }
+
+        function renderQuestions() {
             const container = document.getElementById('questions-container');
             
-            // Remove placeholder if it exists
-            if (container.children.length === 1 && container.children[0].textContent.includes('No questions')) {
-                container.innerHTML = '';
+            if (questions.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8 border-2 border-dashed border-gray-300 rounded-lg">
+                        <p>No questions added yet. Click the buttons above to add questions.</p>
+                    </div>
+                `;
+                return;
             }
 
-            const questionDiv = document.createElement('div');
-            questionDiv.className = 'border border-gray-200 rounded-lg p-4';
-            questionDiv.innerHTML = `
-                <div class="flex items-center justify-between mb-3">
-                    <h4 class="font-medium text-gray-800">Question ${questionCounter}</h4>
-                    <div class="flex items-center space-x-2">
-                        <span class="text-sm text-gray-500 capitalize">${type}</span>
-                        <button type="button" onclick="this.parentElement.parentElement.parentElement.remove()" class="text-red-500 hover:text-red-700">×</button>
+            container.innerHTML = questions.map((question, index) => {
+                let questionSpecificHTML = '';
+                
+                if (question.type === 'multiple') {
+                    questionSpecificHTML = `
+                        <div class="mt-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm font-medium text-gray-700">Options:</label>
+                                <button type="button" onclick="addOption(${question.id})" class="px-2 py-1 bg-green-500 text-white rounded text-xs hover:bg-green-600">
+                                    + Add Option
+                                </button>
+                            </div>
+                            <div class="space-y-2">
+                                ${question.options.map((option, optionIndex) => `
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-sm text-gray-500 w-8">${optionIndex + 1}.</span>
+                                        <input 
+                                            type="text" 
+                                            value="${option}"
+                                            onchange="updateOption(${question.id}, ${optionIndex}, this.value)"
+                                            class="flex-1 p-2 border border-gray-300 rounded text-sm"
+                                            placeholder="Enter option text"
+                                        />
+                                        ${question.options.length > 1 ? `
+                                            <button type="button" onclick="removeOption(${question.id}, ${optionIndex})" class="text-red-500 hover:text-red-700 p-1">
+                                                ×
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                } else if (question.type === 'likert') {
+                    questionSpecificHTML = `
+                        <div class="mt-3 space-y-3">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="text-sm font-medium text-gray-700">Scale Range:</label>
+                                    <div class="flex items-center space-x-2 mt-1">
+                                        <input 
+                                            type="number" 
+                                            value="${question.scale.min}"
+                                            onchange="updateScale(${question.id}, 'min', this.value)"
+                                            min="1" max="10"
+                                            class="w-16 p-2 border border-gray-300 rounded text-sm"
+                                        />
+                                        <span class="text-gray-500">to</span>
+                                        <input 
+                                            type="number" 
+                                            value="${question.scale.max}"
+                                            onchange="updateScale(${question.id}, 'max', this.value)"
+                                            min="2" max="10"
+                                            class="w-16 p-2 border border-gray-300 rounded text-sm"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-sm font-medium text-gray-700">Scale Type:</label>
+                                    <select onchange="updateScaleLabels(${question.id}, this.value)" class="w-full p-2 border border-gray-300 rounded text-sm mt-1">
+                                        <option value="poor-excellent">Poor to Excellent</option>
+                                        <option value="disagree-agree">Disagree to Agree</option>
+                                        <option value="unsatisfied-satisfied">Unsatisfied to Satisfied</option>
+                                        <option value="never-always">Never to Always</option>
+                                        <option value="custom">Custom Labels</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="text-sm font-medium text-gray-700">Low End Label:</label>
+                                    <input 
+                                        type="text" 
+                                        value="${question.scale.labels[0]}"
+                                        onchange="updateScale(${question.id}, 'labels', [this.value, document.querySelector('#high-label-${question.id}').value])"
+                                        class="w-full p-2 border border-gray-300 rounded text-sm mt-1"
+                                        placeholder="e.g., Poor"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="text-sm font-medium text-gray-700">High End Label:</label>
+                                    <input 
+                                        type="text" 
+                                        id="high-label-${question.id}"
+                                        value="${question.scale.labels[1]}"
+                                        onchange="updateScale(${question.id}, 'labels', [document.querySelector('input[onchange*=\"${question.id}\"]').value, this.value])"
+                                        class="w-full p-2 border border-gray-300 rounded text-sm mt-1"
+                                        placeholder="e.g., Excellent"
+                                    />
+                                </div>
+                            </div>
+                            <div class="text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                                Preview: ${question.scale.min} = ${question.scale.labels[0]} | ${question.scale.max} = ${question.scale.labels[1]}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h4 class="font-medium text-gray-800">Question ${index + 1}</h4>
+                            <div class="flex items-center space-x-2">
+                                <span class="text-sm text-gray-500 capitalize px-2 py-1 bg-gray-100 rounded">
+                                    ${question.type === 'curated' ? 'Agree/Disagree' : 
+                                      question.type === 'multiple' ? 'Multiple Choice' : 
+                                      question.type === 'likert' ? 'Rating Scale' : question.type}
+                                </span>
+                                <button type="button" onclick="removeQuestion(${question.id})" class="text-red-500 hover:text-red-700 p-1">×</button>
+                            </div>
+                        </div>
+                        <textarea 
+                            placeholder="Enter your question"
+                            required
+                            value="${question.question}"
+                            onchange="updateQuestion(${question.id}, 'question', this.value)"
+                            class="w-full p-3 border border-gray-300 rounded resize-none"
+                            rows="2"
+                        >${question.question}</textarea>
+                        ${questionSpecificHTML}
                     </div>
-                </div>
-                <textarea 
-                    placeholder="Enter your question"
-                    required
-                    class="w-full p-2 border border-gray-300 rounded resize-none"
-                    rows="2"
-                ></textarea>
-                <input type="hidden" value="${type}" name="question-type">
-            `;
-            
-            container.appendChild(questionDiv);
+                `;
+            }).join('');
+        }
+
+        function updateScaleLabels(questionId, type) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'likert') {
+                const labelSets = {
+                    'poor-excellent': ['Poor', 'Excellent'],
+                    'disagree-agree': ['Disagree', 'Agree'],
+                    'unsatisfied-satisfied': ['Unsatisfied', 'Satisfied'],
+                    'never-always': ['Never', 'Always'],
+                    'custom': question.scale.labels
+                };
+                question.scale.labels = labelSets[type] || question.scale.labels;
+                renderQuestions();
+            }
         }
 
         // Handle form submission
@@ -274,37 +452,23 @@
             
             const title = document.getElementById('survey-title').value;
             const estimatedTime = document.getElementById('survey-time').value;
-            const questionElements = document.querySelectorAll('#questions-container > div');
             
-            if (questionElements.length === 0 || questionElements[0].textContent.includes('No questions')) {
+            if (questions.length === 0) {
                 alert('Please add at least one question to your survey.');
                 return;
             }
 
-            const questions = [];
-            questionElements.forEach((element, index) => {
-                const textarea = element.querySelector('textarea');
-                const typeInput = element.querySelector('input[name="question-type"]');
-                
-                if (textarea && typeInput && textarea.value.trim()) {
-                    const question = {
-                        id: index + 1,
-                        type: typeInput.value,
-                        question: textarea.value.trim()
-                    };
-                    
-                    // Add default options/scale based on type
-                    if (question.type === 'curated') {
-                        question.options = ['Agree', 'Undecided', 'Disagree'];
-                    } else if (question.type === 'multiple') {
-                        question.options = ['Option 1', 'Option 2', 'Option 3'];
-                    } else if (question.type === 'likert') {
-                        question.scale = { min: 1, max: 5, labels: ['Poor', 'Excellent'] };
-                    }
-                    
-                    questions.push(question);
+            // Validate questions
+            for (let question of questions) {
+                if (!question.question.trim()) {
+                    alert('Please fill in all question text.');
+                    return;
                 }
-            });
+                if (question.type === 'multiple' && question.options.some(opt => !opt.trim())) {
+                    alert('Please fill in all option text for multiple choice questions.');
+                    return;
+                }
+            }
 
             try {
                 const response = await fetch('/api/surveys', {
@@ -313,7 +477,13 @@
                     body: JSON.stringify({
                         title: title,
                         estimatedTime: estimatedTime,
-                        questions: questions
+                        questions: questions.map((q, index) => ({
+                            id: index + 1,
+                            type: q.type,
+                            question: q.question,
+                            options: q.type === 'curated' ? ['Agree', 'Undecided', 'Disagree'] : q.options,
+                            scale: q.scale
+                        }))
                     })
                 });
 
@@ -389,8 +559,7 @@
                 });
 
                 if (response.ok) {
-                    // Update local survey status
-                    surveys.forEach(s => s.isActive = false); // Deactivate all
+                    surveys.forEach(s => s.isActive = false);
                     const survey = surveys.find(s => s.id === surveyId);
                     if (survey) survey.isActive = true;
                     
@@ -421,7 +590,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadStatus();
             loadSurveys();
-            setInterval(loadStatus, 30000); // Refresh status every 30 seconds
+            setInterval(loadStatus, 30000);
         });
     </script>
 </body>
