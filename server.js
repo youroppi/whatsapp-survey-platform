@@ -474,7 +474,7 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
     try {
       // Show processing message
       await client.sendMessage(phoneNumber, 
-        "Processing your voice message... This may take a moment!"
+        "🎵 Processing your voice message... This may take a moment!"
       );
 
       // Download and process voice message
@@ -495,21 +495,24 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
       // Translate to English if needed
       const translatedText = await translateToEnglish(transcription.text, transcription.language);
       
-      // Validate the response
+      // Get the current question for context
       const question = survey.questions[session.currentQuestion];
-      const validation = await validateResponse(translatedText, question.question, question.type);
       
-      if (!validation.isValid) {
-        const tryAgainMessage = `I'm having trouble understanding your voice message. ${validation.reason}\n\nCould you please:\n🎤 Try recording again more clearly\n💬 Type your response instead\n⏭️ Type 'skip' to continue\n\nI want to make sure I capture your thoughts accurately!`;
-        
-        await client.sendMessage(phoneNumber, tryAgainMessage);
-        return;
+      // Generate a contextual summary
+      const summary = await generateContextualSummary(translatedText, transcription.text, transcription.language, question.question);
+      
+      // Always show transcription and summary - no validation rejection
+      let confirmationMessage = `🎤 Here's what you said:\n\n"${transcription.text}"`;
+      
+      if (transcription.language !== 'en') {
+        confirmationMessage += `\n\nTranslated: "${translatedText}"`;
       }
-
-      // Generate summary
-      const summary = await generateResponseSummary(translatedText, transcription.text, transcription.language);
       
-      // Store pending validation
+      confirmationMessage += `\n\n📝 Summary of your response:\n"${summary}"`;
+      
+      confirmationMessage += `\n\nIs this what you meant?\n✅ Type 'yes' to confirm\n❌ Type 'no' to try again\n⏭️ Type 'skip' to continue without this response`;
+      
+      // Store pending validation with the summary
       session.pendingVoiceValidation = {
         originalText: transcription.text,
         translatedText: translatedText,
@@ -520,14 +523,6 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
       
       // Ask for confirmation
       session.stage = 'voice_confirmation';
-      
-      let confirmationMessage = `Voice message received! Here's what I understood:\n\n"${summary}"`;
-      
-      if (transcription.language !== 'en') {
-        confirmationMessage += `\n\nDetected language: ${transcription.language}`;
-      }
-      
-      confirmationMessage += `\n\nIs this correct?\n✅ Type 'yes' to confirm\n❌ Type 'no' to try again\n⏭️ Type 'skip' to continue without this response`;
       
       await client.sendMessage(phoneNumber, confirmationMessage);
       return;
