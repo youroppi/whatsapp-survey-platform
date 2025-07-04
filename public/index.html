@@ -11,11 +11,11 @@
         <div class="max-w-7xl mx-auto">
             <div class="mb-8">
                 <h1 class="text-3xl font-bold text-gray-800 mb-2">WhatsApp Survey Platform</h1>
-                <p class="text-gray-600">Admin Dashboard - Your server is running successfully!</p>
+                <p class="text-gray-600">Admin Dashboard - Manage surveys and analyze responses</p>
             </div>
             
+            <!-- Status Panels -->
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                <!-- WhatsApp Status -->
                 <div class="bg-white rounded-xl shadow-lg p-6">
                     <h2 class="text-xl font-bold text-gray-800 mb-4">WhatsApp Connection</h2>
                     <div id="whatsapp-status" class="text-center">
@@ -23,7 +23,6 @@
                     </div>
                 </div>
                 
-                <!-- OpenAI Status -->
                 <div class="bg-white rounded-xl shadow-lg p-6">
                     <h2 class="text-xl font-bold text-gray-800 mb-4">AI Voice Features</h2>
                     <div id="openai-status" class="text-center">
@@ -32,40 +31,136 @@
                 </div>
             </div>
             
-            <div class="bg-white rounded-xl shadow-lg p-6">
-                <div class="text-center py-12">
-                    <div class="text-6xl mb-4">📱</div>
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4">Platform is Live!</h2>
-                    <div id="server-status" class="mb-6">
-                        <div class="text-green-700 text-lg">✅ Server is running on Render!</div>
+            <!-- Survey Management -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-bold text-gray-800">Survey Management</h2>
+                    <button 
+                        onclick="showCreateSurvey()" 
+                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2 transition-colors"
+                    >
+                        <span class="text-lg">+</span>
+                        <span>Create Survey</span>
+                    </button>
+                </div>
+                
+                <div id="surveys-list" class="space-y-4">
+                    <div class="text-center text-gray-500 py-8">
+                        <div class="text-4xl mb-4">📊</div>
+                        <p>No surveys created yet. Click "Create Survey" to get started!</p>
                     </div>
-                    
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                        <div class="bg-blue-50 rounded-lg p-4">
-                            <h3 class="font-semibold text-blue-800 mb-2">📊 Real-time Analytics</h3>
-                            <p class="text-sm text-blue-600">Track survey responses live</p>
-                        </div>
-                        <div class="bg-green-50 rounded-lg p-4">
-                            <h3 class="font-semibold text-green-800 mb-2">🤖 WhatsApp Bot</h3>
-                            <p class="text-sm text-green-600">Automated conversations</p>
-                        </div>
-                        <div class="bg-purple-50 rounded-lg p-4">
-                            <h3 class="font-semibold text-purple-800 mb-2">🎤 Voice AI</h3>
-                            <p class="text-sm text-purple-600">Multi-language transcription</p>
-                        </div>
+                </div>
+            </div>
+            
+            <!-- Quick Start Guide -->
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Start Guide</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-blue-50 rounded-lg p-4">
+                        <div class="text-2xl mb-2">1️⃣</div>
+                        <h3 class="font-semibold text-blue-800 mb-2">Create Survey</h3>
+                        <p class="text-sm text-blue-600">Design questions with multiple choice, ratings, or text responses</p>
+                    </div>
+                    <div class="bg-green-50 rounded-lg p-4">
+                        <div class="text-2xl mb-2">2️⃣</div>
+                        <h3 class="font-semibold text-green-800 mb-2">Activate Survey</h3>
+                        <p class="text-sm text-green-600">Make your survey live for WhatsApp participants</p>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-4">
+                        <div class="text-2xl mb-2">3️⃣</div>
+                        <h3 class="font-semibold text-purple-800 mb-2">Collect Responses</h3>
+                        <p class="text-sm text-purple-600">Share your WhatsApp number and start collecting data!</p>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- Create Survey Modal -->
+    <div id="create-survey-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-xl p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-bold text-gray-800">Create New Survey</h2>
+                <button onclick="hideCreateSurvey()" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+            </div>
+
+            <form id="survey-form">
+                <div class="space-y-4 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Survey Title</label>
+                        <input 
+                            type="text" 
+                            id="survey-title" 
+                            required
+                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            placeholder="Enter survey title"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Estimated Time</label>
+                        <input 
+                            type="text" 
+                            id="survey-time" 
+                            value="3-5 minutes"
+                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            placeholder="e.g., 3-5 minutes"
+                        />
+                    </div>
+
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <label class="block text-sm font-medium text-gray-700">Questions</label>
+                            <div class="flex space-x-2">
+                                <button type="button" onclick="addQuestion('curated')" class="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600">
+                                    + Agree/Disagree
+                                </button>
+                                <button type="button" onclick="addQuestion('multiple')" class="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600">
+                                    + Multiple Choice
+                                </button>
+                                <button type="button" onclick="addQuestion('likert')" class="px-3 py-1 bg-purple-500 text-white rounded text-sm hover:bg-purple-600">
+                                    + Rating Scale
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="questions-container" class="space-y-3">
+                            <div class="text-center text-gray-500 py-4 border-2 border-dashed border-gray-300 rounded-lg">
+                                <p>No questions added yet. Click the buttons above to add questions.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex space-x-4">
+                    <button 
+                        type="submit" 
+                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                        Create Survey
+                    </button>
+                    <button 
+                        type="button" 
+                        onclick="hideCreateSurvey()" 
+                        class="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+        let surveys = [];
+        let questionCounter = 0;
+
+        // Load initial status
         async function loadStatus() {
             const whatsappStatus = document.getElementById('whatsapp-status');
             const openaiStatus = document.getElementById('openai-status');
             
             try {
-                // Check WhatsApp status
                 const whatsappResponse = await fetch('/api/whatsapp/status');
                 const whatsappData = await whatsappResponse.json();
                 
@@ -81,14 +176,12 @@
                         <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
                             <div class="text-blue-700 font-semibold mb-4">📱 Scan QR Code with WhatsApp:</div>
                             <img src="${whatsappData.qrCode}" alt="WhatsApp QR Code" class="max-w-xs mx-auto rounded-lg border">
-                            <div class="text-blue-600 text-sm mt-2">Open WhatsApp → Settings → Linked Devices → Link a device</div>
                         </div>
                     `;
                 } else {
                     whatsappStatus.innerHTML = `
                         <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                             <div class="text-yellow-700">🔄 Initializing WhatsApp...</div>
-                            <div class="text-yellow-600 text-sm">QR code will appear shortly</div>
                         </div>
                     `;
                 }
@@ -101,7 +194,6 @@
             }
             
             try {
-                // Check OpenAI status
                 const openaiResponse = await fetch('/api/openai/status');
                 const openaiData = await openaiResponse.json();
                 
@@ -128,12 +220,209 @@
                 `;
             }
         }
-        
-        // Load status when page loads
-        document.addEventListener('DOMContentLoaded', loadStatus);
-        
-        // Refresh every 10 seconds
-        setInterval(loadStatus, 10000);
+
+        // Survey Management Functions
+        function showCreateSurvey() {
+            document.getElementById('create-survey-modal').classList.remove('hidden');
+        }
+
+        function hideCreateSurvey() {
+            document.getElementById('create-survey-modal').classList.add('hidden');
+            document.getElementById('survey-form').reset();
+            document.getElementById('questions-container').innerHTML = `
+                <div class="text-center text-gray-500 py-4 border-2 border-dashed border-gray-300 rounded-lg">
+                    <p>No questions added yet. Click the buttons above to add questions.</p>
+                </div>
+            `;
+            questionCounter = 0;
+        }
+
+        function addQuestion(type) {
+            questionCounter++;
+            const container = document.getElementById('questions-container');
+            
+            // Remove placeholder if it exists
+            if (container.children.length === 1 && container.children[0].textContent.includes('No questions')) {
+                container.innerHTML = '';
+            }
+
+            const questionDiv = document.createElement('div');
+            questionDiv.className = 'border border-gray-200 rounded-lg p-4';
+            questionDiv.innerHTML = `
+                <div class="flex items-center justify-between mb-3">
+                    <h4 class="font-medium text-gray-800">Question ${questionCounter}</h4>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-sm text-gray-500 capitalize">${type}</span>
+                        <button type="button" onclick="this.parentElement.parentElement.parentElement.remove()" class="text-red-500 hover:text-red-700">×</button>
+                    </div>
+                </div>
+                <textarea 
+                    placeholder="Enter your question"
+                    required
+                    class="w-full p-2 border border-gray-300 rounded resize-none"
+                    rows="2"
+                ></textarea>
+                <input type="hidden" value="${type}" name="question-type">
+            `;
+            
+            container.appendChild(questionDiv);
+        }
+
+        // Handle form submission
+        document.getElementById('survey-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const title = document.getElementById('survey-title').value;
+            const estimatedTime = document.getElementById('survey-time').value;
+            const questionElements = document.querySelectorAll('#questions-container > div');
+            
+            if (questionElements.length === 0 || questionElements[0].textContent.includes('No questions')) {
+                alert('Please add at least one question to your survey.');
+                return;
+            }
+
+            const questions = [];
+            questionElements.forEach((element, index) => {
+                const textarea = element.querySelector('textarea');
+                const typeInput = element.querySelector('input[name="question-type"]');
+                
+                if (textarea && typeInput && textarea.value.trim()) {
+                    const question = {
+                        id: index + 1,
+                        type: typeInput.value,
+                        question: textarea.value.trim()
+                    };
+                    
+                    // Add default options/scale based on type
+                    if (question.type === 'curated') {
+                        question.options = ['Agree', 'Undecided', 'Disagree'];
+                    } else if (question.type === 'multiple') {
+                        question.options = ['Option 1', 'Option 2', 'Option 3'];
+                    } else if (question.type === 'likert') {
+                        question.scale = { min: 1, max: 5, labels: ['Poor', 'Excellent'] };
+                    }
+                    
+                    questions.push(question);
+                }
+            });
+
+            try {
+                const response = await fetch('/api/surveys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: title,
+                        estimatedTime: estimatedTime,
+                        questions: questions
+                    })
+                });
+
+                if (response.ok) {
+                    const survey = await response.json();
+                    surveys.push(survey);
+                    renderSurveys();
+                    hideCreateSurvey();
+                    alert('Survey created successfully!');
+                } else {
+                    alert('Error creating survey. Please try again.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error creating survey. Please check your connection.');
+            }
+        });
+
+        // Render surveys list
+        function renderSurveys() {
+            const container = document.getElementById('surveys-list');
+            
+            if (surveys.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8">
+                        <div class="text-4xl mb-4">📊</div>
+                        <p>No surveys created yet. Click "Create Survey" to get started!</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = surveys.map(survey => `
+                <div class="border border-gray-200 rounded-lg p-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-xl font-semibold text-gray-800">${survey.title}</h3>
+                        <div class="flex items-center space-x-2">
+                            ${survey.isActive ? '<span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">Active</span>' : ''}
+                            <span class="text-sm text-gray-500">${survey.questions.length} questions</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center space-x-4 text-sm text-gray-600 mb-3">
+                        <span>👥 ${survey.participants || 0} participants</span>
+                        <span>📊 ${survey.responses || 0} responses</span>
+                        <span>⏱️ ~${survey.estimatedTime}</span>
+                    </div>
+
+                    <div class="flex space-x-2">
+                        <button 
+                            onclick="activateSurvey('${survey.id}')"
+                            ${survey.isActive ? 'disabled' : ''}
+                            class="px-3 py-1 ${survey.isActive ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'} text-white rounded text-sm"
+                        >
+                            ${survey.isActive ? 'Active' : 'Activate'}
+                        </button>
+                        <button class="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600">
+                            View Results
+                        </button>
+                        <button class="px-3 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600">
+                            Export Data
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Activate survey
+        async function activateSurvey(surveyId) {
+            try {
+                const response = await fetch(`/api/surveys/${surveyId}/activate`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    // Update local survey status
+                    surveys.forEach(s => s.isActive = false); // Deactivate all
+                    const survey = surveys.find(s => s.id === surveyId);
+                    if (survey) survey.isActive = true;
+                    
+                    renderSurveys();
+                    alert('Survey activated! Participants can now respond via WhatsApp.');
+                } else {
+                    alert('Error activating survey. Please try again.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error activating survey. Please check your connection.');
+            }
+        }
+
+        // Load existing surveys
+        async function loadSurveys() {
+            try {
+                const response = await fetch('/api/surveys');
+                const data = await response.json();
+                surveys = data;
+                renderSurveys();
+            } catch (error) {
+                console.error('Error loading surveys:', error);
+            }
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStatus();
+            loadSurveys();
+            setInterval(loadStatus, 30000); // Refresh status every 30 seconds
+        });
     </script>
 </body>
 </html>
