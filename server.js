@@ -59,10 +59,30 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com", "https://cdnjs.cloudflare.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"],
+      scriptSrc: [
+        "'self'", 
+        "'unsafe-eval'",  // Required for some libraries
+        "https://cdn.tailwindcss.com", 
+        "https://cdnjs.cloudflare.com"
+      ],
+      styleSrc: [
+        "'self'", 
+        "'unsafe-inline'",  // Required for Tailwind
+        "https://cdn.tailwindcss.com"
+      ],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"]
+      connectSrc: [
+        "'self'", 
+        "ws:", 
+        "wss:", 
+        "http:", 
+        "https:",
+        "*.onrender.com"  // Allow Render.com connections
+      ],
+      fontSrc: ["'self'", "https:", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
     }
   }
 }));
