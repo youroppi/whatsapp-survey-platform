@@ -1,5 +1,5 @@
 // server.js - Complete WhatsApp Survey Platform Server
-// Production-ready server with all functionality
+// Production-ready server with all functionality and Render.com fixes
 
 require('dotenv').config();
 
@@ -25,13 +25,22 @@ const logger = {
   debug: (message, data = {}) => process.env.NODE_ENV !== 'production' && console.log(`[DEBUG] ${new Date().toISOString()} - ${message}`, data)
 };
 
+// Express app setup
+const app = express();
+const server = http.createServer(app);
+
+// Important: Set trust proxy for Render.com
+app.set('trust proxy', true);
+
+// Socket.IO setup with Render.com compatibility fixes
 const io = socketIo(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ['https://whatsapp-survey-platform.onrender.com', 'https://*.onrender.com']
+      ? ['https://whatsapp-survey-platform.onrender.com', 'https://*.onrender.com', '*']
       : "*",
     methods: ["GET", "POST"],
-    credentials: true
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"]
   },
   // Important for Render.com
   transports: ['polling', 'websocket'],
@@ -45,12 +54,56 @@ const io = socketIo(server, {
   }
 });
 
-// Also update your Express middleware to handle Render's proxy
-app.set('trust proxy', true);
+// Security middleware with Socket.IO compatibility
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com", "https://cdnjs.cloudflare.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"]
+    }
+  }
+}));
 
-// Add this middleware before your routes
+// CORS configuration
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc)
+    if (!origin) return callback(null, true);
+    
+    // In production, be more restrictive
+    if (process.env.NODE_ENV === 'production') {
+      const allowedOrigins = [
+        'https://whatsapp-survey-platform.onrender.com',
+        /https:\/\/.*\.onrender\.com$/
+      ];
+      
+      const isAllowed = allowedOrigins.some(allowed => {
+        if (allowed instanceof RegExp) {
+          return allowed.test(origin);
+        }
+        return allowed === origin;
+      });
+      
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        callback(null, true); // Still allow for now to prevent issues
+      }
+    } else {
+      // In development, allow all origins
+      callback(null, true);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Handle preflight requests
 app.use((req, res, next) => {
-  // Handle preflight requests
   if (req.method === 'OPTIONS') {
     res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
@@ -61,29 +114,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com", "https://cdnjs.cloudflare.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"],
-      imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "ws:", "wss:"]
-    }
-  }
-}));
-
 // Rate limiting with rate-limiter-flexible
 const rateLimiter = new RateLimiterMemory({
-  keyGenerator: (req) => req.ip,
+  keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
   points: 100, // Number of requests
   duration: 900, // Per 15 minutes (900 seconds)
 });
 
 const rateLimitMiddleware = async (req, res, next) => {
   try {
-    await rateLimiter.consume(req.ip);
+    await rateLimiter.consume(req.ip || req.socket.remoteAddress || 'unknown');
     next();
   } catch (rejRes) {
     res.status(429).json({ error: 'Too many requests from this IP, please try again later.' });
@@ -91,7 +131,6 @@ const rateLimitMiddleware = async (req, res, next) => {
 };
 
 app.use('/api/', rateLimitMiddleware);
-app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
 
@@ -114,63 +153,68 @@ let isOpenAIConfigured = false;
 
 // Initialize WhatsApp client
 function initializeWhatsApp() {
-  client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu'
-      ]
-    }
-  });
+  try {
+    client = new Client({
+      authStrategy: new LocalAuth(),
+      puppeteer: {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu'
+        ]
+      }
+    });
 
-  client.on('qr', async (qr) => {
-    logger.info('QR code generated');
-    try {
-      qrCodeData = await qrcode.toDataURL(qr);
-      io.emit('qr-code', { qrCode: qrCodeData });
-    } catch (error) {
-      logger.error('Error generating QR code', error);
-    }
-  });
+    client.on('qr', async (qr) => {
+      logger.info('QR code generated');
+      try {
+        qrCodeData = await qrcode.toDataURL(qr);
+        io.emit('qr-code', { qrCode: qrCodeData });
+      } catch (error) {
+        logger.error('Error generating QR code', error);
+      }
+    });
 
-  client.on('ready', () => {
-    logger.info('WhatsApp client is ready');
-    isClientReady = true;
-    qrCodeData = null;
-    io.emit('whatsapp-ready', true);
-    loadActiveSurveys();
-  });
+    client.on('ready', () => {
+      logger.info('WhatsApp client is ready');
+      isClientReady = true;
+      qrCodeData = null;
+      io.emit('whatsapp-ready', true);
+      loadActiveSurveys();
+    });
 
-  client.on('authenticated', () => {
-    logger.info('WhatsApp client authenticated');
-  });
+    client.on('authenticated', () => {
+      logger.info('WhatsApp client authenticated');
+    });
 
-  client.on('auth_failure', (msg) => {
-    logger.error('WhatsApp authentication failed', msg);
-    isClientReady = false;
-    io.emit('whatsapp-ready', false);
-  });
+    client.on('auth_failure', (msg) => {
+      logger.error('WhatsApp authentication failed', msg);
+      isClientReady = false;
+      io.emit('whatsapp-ready', false);
+    });
 
-  client.on('disconnected', (reason) => {
-    logger.warn('WhatsApp client disconnected', reason);
-    isClientReady = false;
-    io.emit('whatsapp-ready', false);
-  });
+    client.on('disconnected', (reason) => {
+      logger.warn('WhatsApp client disconnected', reason);
+      isClientReady = false;
+      io.emit('whatsapp-ready', false);
+    });
 
-  client.on('message', async (message) => {
-    if (message.from.endsWith('@c.us')) {
-      await handleWhatsAppMessage(message);
-    }
-  });
+    client.on('message', async (message) => {
+      if (message.from.endsWith('@c.us')) {
+        await handleWhatsAppMessage(message);
+      }
+    });
 
-  client.initialize();
+    client.initialize();
+  } catch (error) {
+    logger.error('Failed to initialize WhatsApp client', error);
+    // Continue without WhatsApp functionality
+  }
 }
 
 // Handle incoming WhatsApp messages
@@ -269,7 +313,7 @@ async function createSession(phoneNumber, surveyId, participantId) {
     
     // Create survey_participant entry
     await client.query(
-      'INSERT INTO survey_participants (survey_id, participant_id, participant_survey_code) VALUES ($1, $2, $3)',
+      'INSERT INTO survey_participants (survey_id, participant_id, participant_survey_code) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
       [surveyId, participantId, generateParticipantCode()]
     );
     
@@ -517,7 +561,7 @@ app.get('/api/surveys', async (req, res) => {
   try {
     const result = await client.query(`
       SELECT s.*, 
-             COUNT(q.id) as question_count,
+             COUNT(DISTINCT q.id) as question_count,
              COUNT(DISTINCT sp.participant_id) as participant_count
       FROM surveys s
       LEFT JOIN questions q ON s.id = q.survey_id
@@ -735,7 +779,7 @@ app.post('/api/openai/test', async (req, res) => {
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
-  logger.info('Admin client connected');
+  logger.info('Admin client connected via ' + socket.conn.transport.name);
   connectedClients.add(socket);
   
   // Send current status
@@ -754,6 +798,10 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     logger.info('Admin client disconnected');
     connectedClients.delete(socket);
+  });
+  
+  socket.on('error', (error) => {
+    logger.error('Socket error', error);
   });
 });
 
@@ -797,7 +845,8 @@ app.get('/health', async (req, res) => {
       timestamp: new Date().toISOString(),
       whatsapp: isClientReady,
       openai: !!process.env.OPENAI_API_KEY,
-      database: dbResult.rows.length > 0
+      database: dbResult.rows.length > 0,
+      transport: io.engine ? io.engine.transport.name : 'unknown'
     });
   } catch (error) {
     logger.error('Health check failed', error);
@@ -857,10 +906,13 @@ async function initialize() {
     
     // Start server
     const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => {
+    server.listen(PORT, '0.0.0.0', () => {
       logger.info(`🎉 Server running on port ${PORT}`);
       logger.info(`📱 Admin dashboard: http://localhost:${PORT}`);
-      logger.info(`🔧 If you see database errors, run: node database-setup.js`);
+      logger.info(`🔧 Transport support: polling, websocket`);
+      if (process.env.NODE_ENV === 'production') {
+        logger.info(`🌐 Production mode enabled`);
+      }
     });
     
     // Broadcast stats every 30 seconds
