@@ -352,9 +352,9 @@ async function createSurvey(surveyData) {
     
     // Insert survey
     await dbClient.query(
-      `INSERT INTO surveys (id, title, estimated_time, participant_prefix) 
-       VALUES ($1, $2, $3, $4)`,
-      [surveyId, surveyData.title, surveyData.estimatedTime, surveyPrefix]
+      `INSERT INTO surveys (id, title, description, estimated_time, participant_prefix) 
+       VALUES ($1, $2, $3, $4, $5)`,
+      [surveyId, surveyData.title, surveyData.description || '', surveyData.estimatedTime, surveyPrefix]
     );
     
     // Insert questions
@@ -473,21 +473,23 @@ async function getOrCreateSession(phoneNumber, activeSurvey) {
       const session = result.rows[0];
       return {
         ...session,
-        sessionData: session.session_data || {}
+        sessionData: session.session_data || {},
+        session_data: session.session_data || {}
       };
     }
     
     // Create new session
     result = await dbClient.query(
-      `INSERT INTO sessions (phone_number, survey_id, participant_id, session_data)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO sessions (phone_number, survey_id, participant_id, session_data, current_question, stage)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [phoneNumber, activeSurvey.id, participant.id, JSON.stringify({})]
+      [phoneNumber, activeSurvey.id, participant.id, JSON.stringify({}), 0, 'initial']
     );
     
     return {
       ...result.rows[0],
-      sessionData: {}
+      sessionData: {},
+      session_data: {}
     };
   } finally {
     dbClient.release();
@@ -501,19 +503,25 @@ async function updateSession(sessionId, updates) {
     let paramCount = 1;
     
     if (updates.currentQuestion !== undefined) {
-      setClause.push(`current_question = $${paramCount}`);
+      setClause.push(`current_question = ${paramCount}`);
       values.push(updates.currentQuestion);
       paramCount++;
     }
     
+    if (updates.current_question !== undefined) {
+      setClause.push(`current_question = ${paramCount}`);
+      values.push(updates.current_question);
+      paramCount++;
+    }
+    
     if (updates.stage !== undefined) {
-      setClause.push(`stage = $${paramCount}`);
+      setClause.push(`stage = ${paramCount}`);
       values.push(updates.stage);
       paramCount++;
     }
     
     if (updates.sessionData !== undefined) {
-      setClause.push(`session_data = $${paramCount}`);
+      setClause.push(`session_data = ${paramCount}`);
       values.push(JSON.stringify(updates.sessionData));
       paramCount++;
     }
@@ -521,9 +529,11 @@ async function updateSession(sessionId, updates) {
     values.push(sessionId);
     
     await pool.query(
-      `UPDATE sessions SET ${setClause.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramCount}`,
+      `UPDATE sessions SET ${setClause.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ${paramCount}`,
       values
     );
+    
+    console.log(`Updated session ${sessionId}: ${setClause.join(', ')}`);
   } catch (error) {
     console.error('Error updating session:', error);
   }
@@ -548,6 +558,8 @@ async function handleWhatsAppMessage(message) {
   
   // Get or create session
   const session = await getOrCreateSession(phoneNumber, activeSurvey);
+  
+  console.log(`Session stage: ${session.stage}, Current question: ${session.current_question}`);
   
   // Handle different conversation stages
   switch (session.stage) {
@@ -576,8 +588,15 @@ async function handleInitialMessage(phoneNumber, session, survey) {
     sessionData: { participantCode }
   });
   
-  // Send welcome message
-  const welcomeMessage = `Welcome to our survey! 📊\n\n*${survey.title}*\n\nThis will take about ${survey.estimated_time || '3-5'} minutes. Let's get started!\n\nYour participant ID: ${participantCode}`;
+  // Send welcome message (without participant ID)
+  let welcomeMessage = `Welcome to our survey! 📊\n\n*${survey.title}*\n\n`;
+  
+  // Add custom description if available
+  if (survey.description && survey.description.trim()) {
+    welcomeMessage += `${survey.description}\n\n`;
+  }
+  
+  welcomeMessage += `This will take about ${survey.estimated_time || '3-5'} minutes. Let's get started!`;
   
   await client.sendMessage(phoneNumber, welcomeMessage);
   await sendCurrentQuestion(phoneNumber, session, survey);
@@ -672,7 +691,9 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
     ...session.sessionData,
     pendingAnswer: {
       questionId: question.id,
-      answer: selectedAnswer
+      answer: selectedAnswer,
+      questionType: question.type,
+      questionText: question.question
     }
   };
   
@@ -681,8 +702,39 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
     sessionData
   });
 
-  // Ask for follow-up
-  const followUpMessage = `Great! Could you tell me why you chose that answer?\n\nYou can:\n🎤 Send a voice message (I'll transcribe it)\n💬 Type your response\n⏭️ Type 'skip' to continue\n\nI'd love to hear your thoughts!`;
+  // Create contextual follow-up message based on the answer
+  let followUpMessage = '';
+  
+  if (question.type === 'curated' || question.type === 'multiple') {
+    // For agree/disagree or multiple choice
+    if (question.type === 'curated' && question.options) {
+      if (selectedAnswer.toLowerCase() === 'agree') {
+        followUpMessage = `Great to hear you agree! I'd love to understand what makes you feel positive about this.`;
+      } else if (selectedAnswer.toLowerCase() === 'disagree') {
+        followUpMessage = `I understand you disagree with this statement. Could you share what concerns you have?`;
+      } else if (selectedAnswer.toLowerCase() === 'undecided') {
+        followUpMessage = `I see you're undecided. What factors are making it difficult to decide?`;
+      } else {
+        followUpMessage = `Thank you for selecting "${selectedAnswer}". Could you tell me more about your choice?`;
+      }
+    } else {
+      followUpMessage = `You selected "${selectedAnswer}". I'd love to hear more about why you chose this option.`;
+    }
+  } else if (question.type === 'likert') {
+    const rating = parseInt(selectedAnswer);
+    const scale = question.scale;
+    if (rating <= scale.min + 1) {
+      followUpMessage = `I see you gave a low rating of ${rating}. What aspects need improvement?`;
+    } else if (rating >= scale.max - 1) {
+      followUpMessage = `Wonderful! You gave a high rating of ${rating}. What did you particularly like?`;
+    } else {
+      followUpMessage = `You rated this ${rating} out of ${scale.max}. What influenced your rating?`;
+    }
+  } else {
+    followUpMessage = `Thank you for your response. Could you elaborate a bit more?`;
+  }
+  
+  followUpMessage += `\n\nYou can:\n🎤 Send a voice message (I'll transcribe it)\n💬 Type your response\n⏭️ Type 'skip' to continue\n\nI'd love to hear your thoughts!`;
   
   await client.sendMessage(phoneNumber, followUpMessage);
 }
@@ -797,7 +849,7 @@ async function handleVoiceConfirmation(phoneNumber, session, survey, messageText
 }
 
 async function processFollowUpResponse(phoneNumber, session, survey, followUpText, voiceData = null) {
-  const sessionData = session.sessionData || {};
+  const sessionData = session.sessionData || session.session_data || {};
   const pendingAnswer = sessionData.pendingAnswer;
   
   if (pendingAnswer) {
@@ -827,6 +879,8 @@ async function processFollowUpResponse(phoneNumber, session, survey, followUpTex
   // Move to next question
   const nextQuestion = session.current_question + 1;
   
+  console.log(`Moving from question ${session.current_question} to ${nextQuestion} (total: ${survey.questions.length})`);
+  
   if (nextQuestion >= survey.questions.length) {
     // Survey complete
     const participantCode = sessionData.participantCode;
@@ -841,7 +895,7 @@ async function processFollowUpResponse(phoneNumber, session, survey, followUpTex
       [survey.id, session.participant_id]
     );
     
-    const completionMessage = `Thank you for completing the survey!\n\nYour participant ID: ${participantCode}\n\nYour responses have been recorded. Your feedback is valuable to us!\n\nHave a great day!`;
+    const completionMessage = `Thank you for completing the survey! 🎉\n\nYour responses have been recorded. Your feedback is valuable to us!\n\nHave a great day!`;
     
     await client.sendMessage(phoneNumber, completionMessage);
     
@@ -867,13 +921,13 @@ async function processFollowUpResponse(phoneNumber, session, survey, followUpTex
     
     await client.sendMessage(phoneNumber, progressMessage);
     
-    // Refresh session to get updated values
-    const updatedSession = await pool.query(
-      'SELECT * FROM sessions WHERE id = $1',
-      [session.id]
-    );
+    // Create a session object with updated values for sendCurrentQuestion
+    const updatedSession = {
+      ...session,
+      current_question: nextQuestion
+    };
     
-    await sendCurrentQuestion(phoneNumber, updatedSession.rows[0], survey);
+    await sendCurrentQuestion(phoneNumber, updatedSession, survey);
   }
 }
 
