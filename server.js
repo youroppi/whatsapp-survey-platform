@@ -361,6 +361,13 @@ async function getActiveSurvey() {
 async function sendQuestion(session, message) {
   const client = await pool.connect();
   try {
+    // Get total questions count for this survey
+    const totalQuestionsResult = await client.query(
+      'SELECT COUNT(*) as total FROM questions WHERE survey_id = $1',
+      [session.survey_id]
+    );
+    const totalQuestions = totalQuestionsResult.rows[0].total;
+    
     const result = await client.query(
       'SELECT * FROM questions WHERE survey_id = $1 AND question_number = $2',
       [session.survey_id, session.current_question + 1]
@@ -373,7 +380,8 @@ async function sendQuestion(session, message) {
     }
     
     const question = result.rows[0];
-    let questionText = `Question ${question.question_number}: ${question.question_text}`;
+    // Format: Question X/Y
+    let questionText = `Question ${question.question_number}/${totalQuestions}:\n${question.question_text}`;
     
     if (question.question_type === 'multiple' || question.question_type === 'curated') {
       let options;
@@ -398,8 +406,8 @@ async function sendQuestion(session, message) {
         }
       }
       
-      questionText += '\n\n' + options.map((opt, idx) => `${idx + 1}. ${opt}`).join('\n');
-      questionText += '\n\nPlease reply with the number of your choice.';
+      questionText += '\n' + options.map((opt, idx) => `${idx + 1}. ${opt}`).join('\n');
+      questionText += '\n\nPlease reply with the number of your choice (1, 2, 3...)';
     } else if (question.question_type === 'likert') {
       let scale;
       try {
@@ -417,6 +425,7 @@ async function sendQuestion(session, message) {
       
       questionText += `\n\nRate from ${scale.min} to ${scale.max}`;
       questionText += `\n(${scale.min} = ${scale.labels[0]}, ${scale.max} = ${scale.labels[1]})`;
+      questionText += '\n\nPlease reply with a number';
     } else if (question.question_type === 'text') {
       questionText += '\n\nPlease provide your answer in text or voice message.';
     }
@@ -432,6 +441,266 @@ async function sendQuestion(session, message) {
   } catch (error) {
     logger.error('Error in sendQuestion', error);
     await message.reply('Sorry, there was an error loading the question. Please try again.');
+  } finally {
+    client.release();
+  }
+}
+
+// Updated processResponse function with conversational acknowledgments
+async function processResponse(session, message) {
+  const client = await pool.connect();
+  try {
+    // Check if this is a voice confirmation response
+    if (session.stage === 'voice_confirmation') {
+      await handleVoiceConfirmation(session, message, client);
+      return;
+    }
+    
+    // Check if this is a follow-up response
+    if (session.stage === 'followup') {
+      await handleFollowupResponse(session, message, client);
+      return;
+    }
+    
+    const result = await client.query(
+      'SELECT * FROM questions WHERE survey_id = $1 AND question_number = $2',
+      [session.survey_id, session.current_question]
+    );
+    
+    if (result.rows.length === 0) {
+      await message.reply('Something went wrong. Please start over.');
+      return;
+    }
+    
+    const question = result.rows[0];
+    let answer = message.body;
+    let followUpComment = null;
+    let voiceMetadata = null;
+    
+    // Handle voice messages with enhanced error handling
+    if (message.hasMedia && message.type === 'ptt') {
+      logger.info('Processing voice message...');
+      
+      try {
+        const media = await message.downloadMedia();
+        logger.info(`Downloaded voice message: ${media.mimetype}, size: ${media.data.length}`);
+        
+        if (isOpenAIConfigured) {
+          const transcription = await transcribeVoice(media);
+          
+          if (transcription) {
+            answer = transcription;
+            voiceMetadata = { 
+              duration: message.duration || 0,
+              transcribed: true,
+              originalTranscription: transcription,
+              mimetype: media.mimetype
+            };
+            
+            // Store transcription in session for confirmation
+            await client.query(
+              `UPDATE sessions 
+               SET session_data = jsonb_set(
+                 COALESCE(session_data, '{}'), 
+                 '{pendingVoiceResponse}', 
+                 $1::jsonb
+               ),
+               stage = 'voice_confirmation'
+               WHERE id = $2`,
+              [JSON.stringify({ 
+                answer, 
+                questionId: question.id, 
+                voiceMetadata,
+                questionType: question.question_type 
+              }), session.id]
+            );
+            
+            // Ask for confirmation
+            await message.reply(`I heard: "${answer}"\n\nIs this correct?\n1. Yes\n2. No, let me try again`);
+            return;
+          } else {
+            logger.warn('Transcription returned empty result');
+            await message.reply('Sorry, I couldn\'t understand the voice message. Please try again or type your response.');
+            return;
+          }
+        } else {
+          await message.reply('Voice transcription is not available. Please type your response instead.');
+          return;
+        }
+      } catch (error) {
+        logger.error('Error processing voice message:', error);
+        await message.reply('Sorry, there was an error processing your voice message. Please try again or type your response.');
+        return;
+      }
+    }
+    
+    // Store original answer for acknowledgment
+    let originalAnswer = answer;
+    let formattedAnswer = answer;
+    
+    // Validate answer based on question type
+    if (question.question_type === 'multiple' || question.question_type === 'curated') {
+      let options;
+      try {
+        options = typeof question.options === 'string' 
+          ? JSON.parse(question.options) 
+          : question.options;
+      } catch (e) {
+        // Handle comma-separated string
+        if (typeof question.options === 'string' && question.options.includes(',')) {
+          options = question.options.split(',').map(opt => opt.trim());
+        } else {
+          options = ['Option 1', 'Option 2'];
+        }
+      }
+      
+      const choice = parseInt(answer);
+      if (choice >= 1 && choice <= options.length) {
+        answer = options[choice - 1];
+        formattedAnswer = answer.toLowerCase();
+      } else {
+        await message.reply(`Please reply with a number between 1 and ${options.length}.`);
+        return;
+      }
+    } else if (question.question_type === 'likert') {
+      let scale;
+      try {
+        scale = typeof question.scale === 'string' 
+          ? JSON.parse(question.scale) 
+          : question.scale;
+      } catch (e) {
+        scale = { min: 1, max: 5 };
+      }
+      
+      const rating = parseInt(answer);
+      if (rating >= scale.min && rating <= scale.max) {
+        answer = rating.toString();
+        formattedAnswer = `a rating of ${rating}`;
+      } else {
+        await message.reply(`Please reply with a number between ${scale.min} and ${scale.max}.`);
+        return;
+      }
+    }
+    
+    // Check if response already exists
+    const existingResponse = await client.query(
+      'SELECT id FROM responses WHERE survey_id = $1 AND participant_id = $2 AND question_id = $3',
+      [session.survey_id, session.participant_id, question.id]
+    );
+    
+    if (existingResponse.rows.length > 0) {
+      // Update existing response instead of inserting
+      await client.query(
+        'UPDATE responses SET answer = $1, voice_metadata = $2, created_at = CURRENT_TIMESTAMP WHERE survey_id = $3 AND participant_id = $4 AND question_id = $5',
+        [answer, voiceMetadata ? JSON.stringify(voiceMetadata) : null, session.survey_id, session.participant_id, question.id]
+      );
+      logger.info(`Updated existing response for participant ${session.participant_id}, question ${question.id}`);
+    } else {
+      // Insert new response
+      await client.query(
+        'INSERT INTO responses (survey_id, participant_id, question_id, answer, follow_up_comment, voice_metadata) VALUES ($1, $2, $3, $4, $5, $6)',
+        [session.survey_id, session.participant_id, question.id, answer, followUpComment, voiceMetadata ? JSON.stringify(voiceMetadata) : null]
+      );
+    }
+    
+    // Create conversational acknowledgment based on question type
+    let acknowledgment = '';
+    
+    if (question.question_type === 'curated') {
+      if (formattedAnswer === 'agree') {
+        acknowledgment = `Thank you for sharing that you agree with the statement.`;
+      } else if (formattedAnswer === 'disagree') {
+        acknowledgment = `Thank you for sharing that you disagree with the statement.`;
+      } else if (formattedAnswer === 'neutral' || formattedAnswer === 'undecided') {
+        acknowledgment = `Thank you for sharing that you're undecided about this statement.`;
+      } else {
+        acknowledgment = `Thank you for your response.`;
+      }
+    } else if (question.question_type === 'multiple') {
+      acknowledgment = `Thank you for selecting "${answer}".`;
+    } else if (question.question_type === 'likert') {
+      acknowledgment = `Thank you for giving ${formattedAnswer}.`;
+    } else {
+      acknowledgment = `Thank you for your response.`;
+    }
+    
+    // Broadcast new response for real-time analytics
+    const responseData = {
+      surveyId: session.survey_id,
+      participantId: session.participant_id,
+      phoneNumber: session.phone_number,
+      question: question.question_text,
+      answer: answer,
+      timestamp: new Date().toISOString()
+    };
+    io.emit('new-response', responseData);
+    
+    // Ask follow-up question with conversational tone
+    const shouldAskFollowUp = true; // You can make this configurable per survey
+    
+    if (shouldAskFollowUp && isOpenAIConfigured) {
+      await client.query(
+        `UPDATE sessions 
+         SET stage = 'followup',
+             session_data = jsonb_set(
+               COALESCE(session_data, '{}'), 
+               '{lastQuestionId}', 
+               $1::jsonb
+             )
+         WHERE id = $2`,
+        [question.id.toString(), session.id]
+      );
+      
+      // Conversational follow-up message
+      let followUpMessage = acknowledgment + ' ';
+      
+      if (question.question_type === 'curated') {
+        if (formattedAnswer === 'agree') {
+          followUpMessage += `Can you tell me more about why you agree?\n\n`;
+        } else if (formattedAnswer === 'disagree') {
+          followUpMessage += `Can you tell me more about why you disagree?\n\n`;
+        } else {
+          followUpMessage += `Can you tell me more about why you're undecided?\n\n`;
+        }
+      } else if (question.question_type === 'multiple') {
+        followUpMessage += `Can you tell me more about why you chose this option?\n\n`;
+      } else if (question.question_type === 'likert') {
+        followUpMessage += `Can you tell me more about why you gave this rating?\n\n`;
+      } else {
+        followUpMessage += `Would you like to elaborate on your answer?\n\n`;
+      }
+      
+      followUpMessage += `You can:\n`;
+      followUpMessage += `🎤 Send a voice message (I'll transcribe it)\n`;
+      followUpMessage += `💬 Type your response\n`;
+      followUpMessage += `⏭️ Type 'skip' to continue\n\n`;
+      followUpMessage += `I'd love to hear your thoughts!`;
+      
+      await message.reply(followUpMessage);
+      return;
+    }
+    
+    // If no follow-up, just send acknowledgment and move to next question
+    await message.reply(acknowledgment);
+    
+    // Move to next question
+    await sendQuestion(session, message);
+    
+  } catch (error) {
+    logger.error('Error in processResponse', error);
+    
+    // If it's a duplicate key error, try to recover gracefully
+    if (error.code === '23505') {
+      logger.warn('Duplicate response detected, moving to next question');
+      try {
+        await sendQuestion(session, message);
+      } catch (sendError) {
+        logger.error('Error sending next question after duplicate', sendError);
+        await message.reply('Sorry, something went wrong. Please try again.');
+      }
+    } else {
+      await message.reply('Sorry, something went wrong. Please try again.');
+    }
   } finally {
     client.release();
   }
@@ -718,12 +987,30 @@ async function handleVoiceConfirmation(session, message, client) {
         [session.survey_id, session.participant_id, pendingResponse.questionId, pendingResponse.answer, JSON.stringify(pendingResponse.voiceMetadata)]
       );
       
-      await message.reply(`Great! Your answer has been recorded: "${pendingResponse.answer}"`);
+      // Get question details for proper acknowledgment
+      const questionResult = await client.query(
+        'SELECT * FROM questions WHERE id = $1',
+        [pendingResponse.questionId]
+      );
+      const question = questionResult.rows[0];
       
-      // Clear pending response and move to next question
+      // Create acknowledgment based on answer and question type
+      let acknowledgment = 'Thank you for your response.';
+      if (question && question.question_type === 'curated') {
+        const formattedAnswer = pendingResponse.answer.toLowerCase();
+        if (formattedAnswer.includes('agree')) {
+          acknowledgment = 'Thank you for sharing that you agree with the statement.';
+        } else if (formattedAnswer.includes('disagree')) {
+          acknowledgment = 'Thank you for sharing that you disagree with the statement.';
+        } else if (formattedAnswer.includes('neutral') || formattedAnswer.includes('undecided')) {
+          acknowledgment = 'Thank you for sharing that you\'re undecided about this statement.';
+        }
+      }
+      
+      // Clear pending response and move to follow-up
       await client.query(
-        'UPDATE sessions SET stage = $1, session_data = session_data - $2 WHERE id = $3',
-        ['survey', 'pendingVoiceResponse', session.id]
+        'UPDATE sessions SET stage = $1, session_data = jsonb_set(session_data - $2, \'{lastQuestionId}\', $3::jsonb) WHERE id = $4',
+        ['followup', 'pendingVoiceResponse', pendingResponse.questionId.toString(), session.id]
       );
       
       // Broadcast response
@@ -736,7 +1023,15 @@ async function handleVoiceConfirmation(session, message, client) {
         timestamp: new Date().toISOString()
       });
       
-      await sendQuestion(session, message);
+      // Ask follow-up question with acknowledgment
+      let followUpMessage = acknowledgment + ' Can you tell me more about your response?\n\n';
+      followUpMessage += 'You can:\n';
+      followUpMessage += '🎤 Send a voice message (I\'ll transcribe it)\n';
+      followUpMessage += '💬 Type your response\n';
+      followUpMessage += '⏭️ Type \'skip\' to continue\n\n';
+      followUpMessage += 'I\'d love to hear your thoughts!';
+      
+      await message.reply(followUpMessage);
     } else if (response === '2' || response.toLowerCase() === 'no') {
       // Clear pending response and ask to try again
       await client.query(
@@ -758,7 +1053,8 @@ async function handleVoiceConfirmation(session, message, client) {
 async function handleFollowupResponse(session, message, client) {
   try {
     if (message.body.toLowerCase() === 'skip') {
-      // Move to next question
+      // Acknowledge skip and move to next question
+      await message.reply('No problem! Let\'s continue with the next question.');
       await client.query('UPDATE sessions SET stage = $1 WHERE id = $2', ['survey', session.id]);
       await sendQuestion(session, message);
       return;
@@ -777,7 +1073,13 @@ async function handleFollowupResponse(session, message, client) {
           duration: message.duration || 0,
           transcribed: !!transcription 
         };
+        
+        if (transcription) {
+          await message.reply(`I heard: "${transcription}"\n\nThank you for sharing your thoughts! 🙏`);
+        }
       }
+    } else {
+      await message.reply('Thank you for sharing your thoughts! 🙏');
     }
     
     // Update the last response with follow-up
@@ -789,7 +1091,8 @@ async function handleFollowupResponse(session, message, client) {
       );
     }
     
-    await message.reply('Thank you for the additional feedback!');
+    // Small delay for better conversation flow
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Move to next question
     await client.query('UPDATE sessions SET stage = $1 WHERE id = $2', ['survey', session.id]);
