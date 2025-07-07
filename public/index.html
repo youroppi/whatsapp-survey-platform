@@ -35,29 +35,23 @@
             align-items: center;
             justify-content: center;
         }
-        .debug-panel {
+        .analytics-modal {
+            display: none;
             position: fixed;
-            bottom: 10px;
-            right: 10px;
-            background: #333;
-            color: white;
-            padding: 10px;
-            border-radius: 5px;
-            font-family: monospace;
-            font-size: 12px;
-            max-width: 300px;
-            z-index: 9999;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            overflow-y: auto;
+        }
+        .analytics-modal.show {
+            display: block;
         }
     </style>
 </head>
 <body class="bg-gray-100">
-    <!-- Debug Panel -->
-    <div class="debug-panel" id="debug-panel">
-        <div>Socket: <span id="socket-status">Disconnected</span></div>
-        <div>API: <span id="api-base"></span></div>
-        <div>Errors: <span id="error-count">0</span></div>
-    </div>
-
     <div class="min-h-screen">
         <!-- Header -->
         <header class="bg-white shadow-sm border-b border-gray-200">
@@ -176,6 +170,20 @@
                 </div>
             </div>
 
+            <!-- Real-time Response Feed -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                    <span class="mr-2">📊</span>
+                    Real-time Responses
+                    <span id="response-count" class="ml-auto text-sm font-normal text-gray-600">No responses yet</span>
+                </h2>
+                <div id="realtime-responses" class="space-y-2 max-h-64 overflow-y-auto">
+                    <div class="text-center text-gray-500 py-4">
+                        <p>Waiting for survey responses...</p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Survey Management -->
             <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
@@ -289,17 +297,56 @@
         </div>
     </div>
 
+    <!-- Analytics Modal -->
+    <div id="analytics-modal" class="analytics-modal">
+        <div class="bg-white rounded-lg max-w-6xl w-full mx-auto my-8 max-h-[90vh] overflow-y-auto">
+            <div class="px-6 py-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+                <div class="flex items-center justify-between">
+                    <h3 id="analytics-title" class="text-lg font-semibold text-gray-900">Survey Analytics</h3>
+                    <button id="close-analytics-btn" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="p-6">
+                <div class="mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div class="bg-blue-50 rounded-lg p-4">
+                            <p class="text-sm text-blue-600 mb-1">Total Participants</p>
+                            <p id="analytics-total-participants" class="text-2xl font-bold text-blue-900">0</p>
+                        </div>
+                        <div class="bg-green-50 rounded-lg p-4">
+                            <p class="text-sm text-green-600 mb-1">Completion Rate</p>
+                            <p id="analytics-completion-rate" class="text-2xl font-bold text-green-900">0%</p>
+                        </div>
+                        <div class="bg-purple-50 rounded-lg p-4">
+                            <p class="text-sm text-purple-600 mb-1">Average Time</p>
+                            <p id="analytics-avg-time" class="text-2xl font-bold text-purple-900">0 min</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="analytics-content" class="space-y-6">
+                    <!-- Dynamic content will be inserted here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Global variables
         let socket = null;
         let questions = [];
         let surveys = [];
-        let errorCount = 0;
+        let realtimeResponses = [];
+        let charts = {};
 
         // Get base URL
         function getBaseUrl() {
             const url = window.location.origin;
-            console.log('Base URL:', url);
             return url;
         }
 
@@ -310,8 +357,6 @@
 
         // Show error
         function showError(message) {
-            errorCount++;
-            document.getElementById('error-count').textContent = errorCount;
             console.error('[ERROR]', message);
             
             const errorDiv = document.createElement('div');
@@ -329,35 +374,29 @@
             debugLog('Initializing Socket.IO...');
             
             try {
-                // For Render.com, use explicit URL
-                const socketUrl = window.location.origin;
-                
-                socket = io(socketUrl, {
+                socket = io(getBaseUrl(), {
                     path: '/socket.io/',
-                    transports: ['polling'], // Only use polling on Render free tier
+                    transports: ['polling', 'websocket'],
                     reconnection: true,
-                    reconnectionAttempts: 3,
+                    reconnectionAttempts: 5,
                     reconnectionDelay: 1000,
-                    timeout: 10000,
+                    timeout: 20000,
                     forceNew: true
                 });
                 
                 socket.on('connect', function() {
                     debugLog('Socket connected');
-                    document.getElementById('socket-status').textContent = 'Connected';
                     updateConnectionStatus('Connected', true);
                 });
 
                 socket.on('disconnect', function(reason) {
                     debugLog('Socket disconnected:', reason);
-                    document.getElementById('socket-status').textContent = 'Disconnected';
                     updateConnectionStatus('Disconnected', false);
                 });
 
                 socket.on('connect_error', function(error) {
                     console.warn('Socket connection failed, using API fallback');
-                    document.getElementById('socket-status').textContent = 'API Mode';
-                    // Don't show error for expected failures
+                    updateConnectionStatus('API Mode', false);
                 });
 
                 // Socket event handlers
@@ -365,17 +404,64 @@
                 socket.on('qr-code', (data) => displayQRCode(data.qrCode));
                 socket.on('openai-status', updateOpenAIStatus);
                 socket.on('survey-stats', updateStats);
+                
+                // Real-time response handler
                 socket.on('new-response', (data) => {
-                    addRecentActivity(`New response from ${data.participant}`, 'success');
+                    handleNewResponse(data);
+                    addRecentActivity(`New response from ${data.phoneNumber || 'participant'}`, 'success');
+                });
+                
+                socket.on('survey-completed', (data) => {
+                    addRecentActivity(`Survey completed by ${data.participant}`, 'success');
                     refreshData();
                 });
                 
             } catch (error) {
                 console.warn('Socket.IO initialization failed, using API-only mode');
-                document.getElementById('socket-status').textContent = 'API Only';
+                updateConnectionStatus('API Only', false);
                 // Start polling as fallback
                 setInterval(refreshData, 5000);
             }
+        }
+
+        // Handle new real-time response
+        function handleNewResponse(data) {
+            realtimeResponses.unshift(data);
+            
+            // Keep only last 50 responses
+            if (realtimeResponses.length > 50) {
+                realtimeResponses = realtimeResponses.slice(0, 50);
+            }
+            
+            updateRealtimeResponsesDisplay();
+            
+            // Update count
+            document.getElementById('response-count').textContent = `${realtimeResponses.length} responses today`;
+        }
+
+        // Update real-time responses display
+        function updateRealtimeResponsesDisplay() {
+            const container = document.getElementById('realtime-responses');
+            
+            if (realtimeResponses.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-4">
+                        <p>Waiting for survey responses...</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = realtimeResponses.map(response => `
+                <div class="border-l-4 border-blue-500 pl-4 py-2">
+                    <div class="flex items-center justify-between">
+                        <p class="text-sm font-medium text-gray-900">${response.question || 'Question'}</p>
+                        <span class="text-xs text-gray-500">${new Date(response.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <p class="text-sm text-gray-700">${response.answer}</p>
+                    ${response.isVoice ? '<span class="text-xs text-purple-600">🎤 Voice response</span>' : ''}
+                </div>
+            `).join('');
         }
 
         // Update connection status
@@ -513,12 +599,18 @@
                             <div class="flex items-center space-x-4 mt-2">
                                 <span class="text-xs text-gray-500">${survey.question_count || 0} questions</span>
                                 <span class="text-xs text-gray-500">Est. ${survey.estimated_time || 'N/A'}</span>
+                                <span class="text-xs text-gray-500">${survey.participant_count || 0} participants</span>
+                                <span class="text-xs text-gray-500">${survey.completed_count || 0} completed</span>
                                 <span class="text-xs px-2 py-1 rounded-full ${survey.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
                                     ${survey.is_active ? 'Active' : 'Inactive'}
                                 </span>
                             </div>
                         </div>
                         <div class="flex items-center space-x-2">
+                            <button data-survey-id="${survey.id}" 
+                                    class="survey-analytics-btn px-3 py-1 bg-purple-500 text-white text-sm rounded hover:bg-purple-600">
+                                Analytics
+                            </button>
                             <button data-survey-id="${survey.id}" data-action="${survey.is_active ? 'deactivate' : 'activate'}" 
                                     class="survey-toggle-btn px-3 py-1 text-sm rounded ${survey.is_active ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-green-500 hover:bg-green-600 text-white'}">
                                 ${survey.is_active ? 'Deactivate' : 'Activate'}
@@ -539,6 +631,176 @@
             
             document.querySelectorAll('.survey-export-btn').forEach(btn => {
                 btn.addEventListener('click', handleExportSurvey);
+            });
+            
+            document.querySelectorAll('.survey-analytics-btn').forEach(btn => {
+                btn.addEventListener('click', handleShowAnalytics);
+            });
+        }
+
+        // Show analytics for a survey
+        async function handleShowAnalytics(event) {
+            const surveyId = event.target.dataset.surveyId;
+            const survey = surveys.find(s => s.id === surveyId);
+            
+            if (!survey) return;
+            
+            document.getElementById('analytics-title').textContent = `Analytics: ${survey.title}`;
+            document.getElementById('analytics-modal').classList.add('show');
+            
+            // Update summary stats
+            document.getElementById('analytics-total-participants').textContent = survey.participant_count || 0;
+            const completionRate = survey.participant_count > 0 
+                ? Math.round((survey.completed_count / survey.participant_count) * 100) 
+                : 0;
+            document.getElementById('analytics-completion-rate').textContent = `${completionRate}%`;
+            
+            // Load responses and create charts
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/surveys/${surveyId}/responses`);
+                if (!response.ok) throw new Error('Failed to load responses');
+                
+                const responses = await response.json();
+                displayAnalytics(responses, survey);
+            } catch (error) {
+                showError('Failed to load analytics');
+            }
+        }
+
+        // Display analytics charts
+        function displayAnalytics(responses, survey) {
+            const container = document.getElementById('analytics-content');
+            container.innerHTML = '';
+            
+            // Group responses by question
+            const questionGroups = {};
+            responses.forEach(response => {
+                if (!questionGroups[response.question_text]) {
+                    questionGroups[response.question_text] = {
+                        type: response.question_type,
+                        answers: []
+                    };
+                }
+                questionGroups[response.question_text].answers.push(response.answer);
+            });
+            
+            // Create visualization for each question
+            Object.entries(questionGroups).forEach(([question, data], index) => {
+                const questionDiv = document.createElement('div');
+                questionDiv.className = 'border rounded-lg p-4';
+                
+                const title = document.createElement('h4');
+                title.className = 'font-semibold text-gray-900 mb-3';
+                title.textContent = question;
+                questionDiv.appendChild(title);
+                
+                if (data.type === 'multiple' || data.type === 'curated') {
+                    // Count responses
+                    const counts = {};
+                    data.answers.forEach(answer => {
+                        counts[answer] = (counts[answer] || 0) + 1;
+                    });
+                    
+                    // Create bar chart
+                    const canvas = document.createElement('canvas');
+                    canvas.id = `chart-${index}`;
+                    canvas.height = 100;
+                    questionDiv.appendChild(canvas);
+                    
+                    setTimeout(() => {
+                        const ctx = canvas.getContext('2d');
+                        new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels: Object.keys(counts),
+                                datasets: [{
+                                    label: 'Responses',
+                                    data: Object.values(counts),
+                                    backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                                    borderColor: 'rgba(59, 130, 246, 1)',
+                                    borderWidth: 1
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                scales: {
+                                    y: {
+                                        beginAtZero: true,
+                                        ticks: {
+                                            stepSize: 1
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }, 100);
+                } else if (data.type === 'likert') {
+                    // Create distribution chart for ratings
+                    const ratings = data.answers.map(a => parseInt(a)).filter(n => !isNaN(n));
+                    const distribution = {};
+                    ratings.forEach(rating => {
+                        distribution[rating] = (distribution[rating] || 0) + 1;
+                    });
+                    
+                    const canvas = document.createElement('canvas');
+                    canvas.id = `chart-${index}`;
+                    canvas.height = 100;
+                    questionDiv.appendChild(canvas);
+                    
+                    setTimeout(() => {
+                        const ctx = canvas.getContext('2d');
+                        new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                labels: Object.keys(distribution).sort((a, b) => a - b),
+                                datasets: [{
+                                    label: 'Rating Distribution',
+                                    data: Object.keys(distribution).sort((a, b) => a - b).map(k => distribution[k]),
+                                    backgroundColor: 'rgba(147, 51, 234, 0.2)',
+                                    borderColor: 'rgba(147, 51, 234, 1)',
+                                    borderWidth: 2,
+                                    tension: 0.4
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                scales: {
+                                    y: {
+                                        beginAtZero: true,
+                                        ticks: {
+                                            stepSize: 1
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }, 100);
+                } else {
+                    // Text responses - show sample
+                    const sampleDiv = document.createElement('div');
+                    sampleDiv.className = 'space-y-2 max-h-40 overflow-y-auto';
+                    const samples = data.answers.slice(0, 5);
+                    
+                    samples.forEach(answer => {
+                        const answerDiv = document.createElement('div');
+                        answerDiv.className = 'bg-gray-50 p-2 rounded text-sm text-gray-700';
+                        answerDiv.textContent = answer;
+                        sampleDiv.appendChild(answerDiv);
+                    });
+                    
+                    if (data.answers.length > 5) {
+                        const moreDiv = document.createElement('div');
+                        moreDiv.className = 'text-sm text-gray-500 italic';
+                        moreDiv.textContent = `... and ${data.answers.length - 5} more responses`;
+                        sampleDiv.appendChild(moreDiv);
+                    }
+                    
+                    questionDiv.appendChild(sampleDiv);
+                }
+                
+                container.appendChild(questionDiv);
             });
         }
 
@@ -892,9 +1154,6 @@
         document.addEventListener('DOMContentLoaded', function() {
             debugLog('Initializing application...');
             
-            // Set base URL
-            document.getElementById('api-base').textContent = getBaseUrl();
-            
             // Initialize Socket.IO
             initializeSocket();
             
@@ -908,6 +1167,11 @@
             document.getElementById('close-modal-btn').addEventListener('click', hideCreateSurvey);
             document.getElementById('cancel-survey-btn').addEventListener('click', hideCreateSurvey);
             document.getElementById('survey-form').addEventListener('submit', submitSurvey);
+            
+            // Analytics modal
+            document.getElementById('close-analytics-btn').addEventListener('click', () => {
+                document.getElementById('analytics-modal').classList.remove('show');
+            });
             
             // Question type buttons
             document.getElementById('add-curated-btn').addEventListener('click', () => addQuestion('curated'));
