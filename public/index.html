@@ -4,549 +4,356 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WhatsApp Survey Platform - Admin Dashboard</title>
-    <meta name="description" content="Professional WhatsApp survey platform with voice transcription and real-time analytics">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
         .loader {
-            border: 3px solid #f3f4f6;
-            border-top: 3px solid #3b82f6;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
             border-radius: 50%;
-            width: 20px;
-            height: 20px;
+            width: 16px;
+            height: 16px;
             animation: spin 1s linear infinite;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .fade-in {
-            animation: fadeIn 0.5s ease-in;
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
         }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .status-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-        .status-online { background-color: #10b981; }
-        .status-offline { background-color: #ef4444; }
-        .status-loading { background-color: #f59e0b; animation: pulse 2s infinite; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
     </style>
 </head>
-<body class="bg-gray-50 min-h-screen">
-    <!-- Loading overlay -->
-    <div id="loading-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-lg p-6 flex items-center space-x-3">
-            <div class="loader"></div>
-            <span id="loading-text">Loading...</span>
-        </div>
-    </div>
-
-    <!-- Error notification -->
-    <div id="error-notification" class="fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg transform translate-x-full transition-transform duration-300 z-40">
-        <div class="flex items-center justify-between">
-            <span id="error-message">An error occurred</span>
-            <button onclick="hideError()" class="ml-4 text-white hover:text-gray-200">×</button>
-        </div>
-    </div>
-
-    <!-- Success notification -->
-    <div id="success-notification" class="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg transform translate-x-full transition-transform duration-300 z-40">
-        <div class="flex items-center justify-between">
-            <span id="success-message">Success!</span>
-            <button onclick="hideSuccess()" class="ml-4 text-white hover:text-gray-200">×</button>
-        </div>
-    </div>
-
-    <div class="min-h-screen p-4 sm:p-6">
-        <div class="max-w-7xl mx-auto">
-            <!-- Header -->
-            <div class="mb-8">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-                    <div class="mb-4 sm:mb-0">
-                        <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">WhatsApp Survey Platform</h1>
-                        <p class="text-gray-600">Professional survey management with voice AI</p>
-                        <div class="flex items-center mt-2 space-x-4 text-sm">
-                            <div class="flex items-center">
-                                <span id="connection-status" class="status-indicator status-loading"></span>
-                                <span id="connection-text">Connecting...</span>
-                            </div>
-                            <div class="flex items-center">
-                                <span id="whatsapp-status" class="status-indicator status-loading"></span>
-                                <span id="whatsapp-text">WhatsApp Status</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div id="back-button" class="hidden">
-                        <button onclick="showMainDashboard()" class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors">
-                            ← Back to Dashboard
-                        </button>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Main Dashboard View -->
-            <div id="main-dashboard">
-                <!-- Status Panels -->
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                    <div class="bg-white rounded-xl shadow-lg p-6">
-                        <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                            <span class="mr-2">📱</span>
-                            WhatsApp Connection
-                        </h2>
-                        <div id="whatsapp-status-panel" class="text-center">
-                            <div class="flex items-center justify-center text-blue-600">
-                                <div class="loader mr-2"></div>
-                                Loading WhatsApp status...
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="bg-white rounded-xl shadow-lg p-6">
-                        <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                            <span class="mr-2">🤖</span>
-                            AI Voice Features
-                        </h2>
-                        <div id="openai-status-panel" class="text-center">
-                            <div class="flex items-center justify-center text-blue-600">
-                                <div class="loader mr-2"></div>
-                                Checking AI configuration...
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Quick Stats -->
-                <div id="quick-stats" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 hidden">
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <div class="flex items-center">
-                            <div class="p-3 rounded-full bg-blue-100 text-blue-500">
-                                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                </svg>
-                            </div>
-                            <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-600">Total Surveys</p>
-                                <p id="total-surveys" class="text-2xl font-semibold text-gray-900">0</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <div class="flex items-center">
-                            <div class="p-3 rounded-full bg-green-100 text-green-500">
-                                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"></path>
-                                </svg>
-                            </div>
-                            <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-600">Total Participants</p>
-                                <p id="total-participants" class="text-2xl font-semibold text-gray-900">0</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <div class="flex items-center">
-                            <div class="p-3 rounded-full bg-purple-100 text-purple-500">
-                                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
-                                    <path fill-rule="evenodd" d="M4 5a2 2 0 012-2v1a1 1 0 102 0V3a2 2 0 012 2v6a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 2a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"></path>
-                                </svg>
-                            </div>
-                            <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-600">Total Responses</p>
-                                <p id="total-responses" class="text-2xl font-semibold text-gray-900">0</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-white rounded-lg shadow p-4">
-                        <div class="flex items-center">
-                            <div class="p-3 rounded-full bg-yellow-100 text-yellow-500">
-                                <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                                    <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"></path>
-                                </svg>
-                            </div>
-                            <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-600">Active Survey</p>
-                                <p id="active-survey" class="text-sm font-semibold text-gray-900">None</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Survey Management -->
-                <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
-                        <h2 class="text-xl font-bold text-gray-800 mb-4 sm:mb-0">Survey Management</h2>
-                        <button 
-                            id="create-survey-btn"
-                            onclick="showCreateSurvey()" 
-                            class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <span class="text-lg">+</span>
-                            <span>Create Survey</span>
-                        </button>
-                    </div>
-                    
-                    <div id="surveys-list" class="space-y-4">
-                        <div class="text-center text-gray-500 py-8">
-                            <div class="text-4xl mb-4">📊</div>
-                            <p>No surveys created yet. Click "Create Survey" to get started!</p>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Recent Activity -->
-                <div id="recent-activity" class="bg-white rounded-xl shadow-lg p-6 mb-6 hidden">
-                    <h2 class="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
-                    <div id="activity-list" class="space-y-3">
-                        <!-- Activity items will be populated here -->
-                    </div>
-                </div>
-
-                <!-- Quick Start Guide -->
-                <div class="bg-white rounded-xl shadow-lg p-6">
-                    <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Start Guide</h2>
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div class="bg-blue-50 rounded-lg p-4">
-                            <div class="text-2xl mb-2">1️⃣</div>
-                            <h3 class="font-semibold text-blue-800 mb-2">Create Survey</h3>
-                            <p class="text-sm text-blue-600">Design questions with multiple choice, ratings, or text responses. Add voice AI for deeper insights.</p>
-                        </div>
-                        <div class="bg-green-50 rounded-lg p-4">
-                            <div class="text-2xl mb-2">2️⃣</div>
-                            <h3 class="font-semibold text-green-800 mb-2">Activate Survey</h3>
-                            <p class="text-sm text-green-600">Make your survey live for WhatsApp participants. Only one survey can be active at a time.</p>
-                        </div>
-                        <div class="bg-purple-50 rounded-lg p-4">
-                            <div class="text-2xl mb-2">3️⃣</div>
-                            <h3 class="font-semibold text-purple-800 mb-2">Collect Responses</h3>
-                            <p class="text-sm text-purple-600">Share your WhatsApp number and start collecting data with real-time analytics!</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Results View -->
-            <div id="results-view" class="hidden">
-                <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
+<body class="bg-gray-100">
+    <div class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-white shadow-sm border-b border-gray-200">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-4">
+                    <div class="flex items-center space-x-3">
+                        <div class="text-2xl">💬</div>
                         <div>
-                            <h2 id="results-title" class="text-2xl font-bold text-gray-800">Survey Results</h2>
-                            <p id="results-subtitle" class="text-gray-600">Analytics and response data</p>
-                        </div>
-                        <div class="flex flex-wrap gap-3 mt-4 sm:mt-0">
-                            <button onclick="refreshResults()" class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 flex items-center space-x-2">
-                                <span>🔄</span>
-                                <span>Refresh</span>
-                            </button>
-                            <button onclick="exportSurveyData()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center space-x-2">
-                                <span>📊</span>
-                                <span>Export CSV</span>
-                            </button>
+                            <h1 class="text-2xl font-bold text-gray-900">WhatsApp Survey Platform</h1>
+                            <p class="text-sm text-gray-600">Admin Dashboard</p>
                         </div>
                     </div>
-
-                    <!-- Overview Stats -->
-                    <div id="overview-stats" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                        <!-- Stats will be populated dynamically -->
-                    </div>
-
-                    <!-- Question Results -->
-                    <div id="question-results" class="space-y-8">
-                        <!-- Question analytics will be populated dynamically -->
+                    <div class="flex items-center space-x-4">
+                        <div id="connection-status" class="flex items-center space-x-2">
+                            <div class="w-2 h-2 bg-gray-400 rounded-full"></div>
+                            <span class="text-sm text-gray-600">Connecting...</span>
+                        </div>
+                        <button onclick="refreshData()" class="p-2 text-gray-400 hover:text-gray-600 transition-colors">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                        </button>
                     </div>
                 </div>
             </div>
-        </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            
+            <!-- Status Panels -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <!-- WhatsApp Connection Panel -->
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <span class="mr-2">📱</span>
+                        WhatsApp Connection
+                    </h2>
+                    <div id="whatsapp-status-panel" class="text-center">
+                        <div class="flex items-center justify-center text-blue-600">
+                            <div class="loader mr-2"></div>
+                            <span>Loading WhatsApp status...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Voice Features Panel -->
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <span class="mr-2">🤖</span>
+                        AI Voice Features
+                    </h2>
+                    <div id="openai-status-panel" class="text-center">
+                        <div class="flex items-center justify-center text-blue-600">
+                            <div class="loader mr-2"></div>
+                            <span>Checking AI configuration...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Stats -->
+            <div id="quick-stats" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8 hidden">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-full bg-blue-100 text-blue-500">
+                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">Total Surveys</p>
+                            <p id="total-surveys" class="text-2xl font-semibold text-gray-900">0</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-full bg-green-100 text-green-500">
+                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">Total Participants</p>
+                            <p id="total-participants" class="text-2xl font-semibold text-gray-900">0</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-full bg-purple-100 text-purple-500">
+                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
+                                <path fill-rule="evenodd" d="M4 5a2 2 0 012-2v1a1 1 0 102 0V3a2 2 0 012 2v6a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 2a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">Total Responses</p>
+                            <p id="total-responses" class="text-2xl font-semibold text-gray-900">0</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-full bg-yellow-100 text-yellow-500">
+                            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">Active Survey</p>
+                            <p id="active-survey" class="text-sm font-semibold text-gray-900">None</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Survey Management -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
+                    <h2 class="text-xl font-bold text-gray-800 mb-4 sm:mb-0">Survey Management</h2>
+                    <button 
+                        id="create-survey-btn"
+                        onclick="showCreateSurvey()" 
+                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2 transition-colors"
+                    >
+                        <span class="text-lg">+</span>
+                        <span>Create Survey</span>
+                    </button>
+                </div>
+                
+                <div id="surveys-list" class="space-y-4">
+                    <div class="text-center text-gray-500 py-8">
+                        <div class="text-4xl mb-4">📊</div>
+                        <p>No surveys created yet. Click "Create Survey" to get started!</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
+                <div id="recent-activity" class="space-y-3">
+                    <div class="text-center text-gray-500 py-4">
+                        <p>No recent activity</p>
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
 
     <!-- Create Survey Modal -->
-    <div id="create-survey-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-xl shadow-xl p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div class="flex items-center justify-between mb-6">
-                <h2 class="text-xl font-bold text-gray-800">Create New Survey</h2>
-                <button onclick="hideCreateSurvey()" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+    <div id="create-survey-modal" class="modal">
+        <div class="bg-white rounded-lg max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold text-gray-900">Create New Survey</h3>
+                    <button onclick="hideCreateSurvey()" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
             </div>
-
-            <form id="survey-form">
-                <div class="space-y-4 mb-6">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Survey Title *</label>
-                        <input 
-                            type="text" 
-                            id="survey-title" 
-                            required
-                            maxlength="500"
-                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Enter survey title"
-                        />
+            
+            <div class="p-6">
+                <form id="survey-form">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Survey Title</label>
+                        <input type="text" id="survey-title" name="title" required 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="Enter survey title">
                     </div>
-
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Description (Optional)</label>
-                        <textarea 
-                            id="survey-description" 
-                            rows="3"
-                            maxlength="1000"
-                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Brief description of your survey"
-                        ></textarea>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                        <textarea id="survey-description" name="description" rows="3"
+                                  class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="Brief description of your survey"></textarea>
                     </div>
-
-                    <div>
+                    
+                    <div class="mb-6">
                         <label class="block text-sm font-medium text-gray-700 mb-2">Estimated Time</label>
-                        <input 
-                            type="text" 
-                            id="survey-time" 
-                            value="3-5 minutes"
-                            maxlength="50"
-                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="e.g., 3-5 minutes"
-                        />
+                        <input type="text" id="survey-time" name="estimatedTime" 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="e.g., 3-5 minutes" value="3-5 minutes">
                     </div>
 
-                    <div>
-                        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
-                            <label class="block text-sm font-medium text-gray-700 mb-2 sm:mb-0">Questions *</label>
-                            <div class="flex flex-wrap gap-2">
-                                <button type="button" onclick="addQuestion('curated')" class="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600">
-                                    + Agree/Disagree
-                                </button>
-                                <button type="button" onclick="addQuestion('multiple')" class="px-3 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600">
-                                    + Multiple Choice
-                                </button>
-                                <button type="button" onclick="addQuestion('likert')" class="px-3 py-1 bg-purple-500 text-white rounded text-sm hover:bg-purple-600">
-                                    + Rating Scale
-                                </button>
-                                <button type="button" onclick="addQuestion('text')" class="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600">
-                                    + Text Response
-                                </button>
-                            </div>
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Questions</label>
+                        <div class="flex flex-wrap gap-2 mb-4">
+                            <button type="button" onclick="addQuestion('curated')" 
+                                    class="px-3 py-1 bg-green-500 text-white text-sm rounded hover:bg-green-600">
+                                + Agree/Disagree
+                            </button>
+                            <button type="button" onclick="addQuestion('multiple')" 
+                                    class="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
+                                + Multiple Choice
+                            </button>
+                            <button type="button" onclick="addQuestion('likert')" 
+                                    class="px-3 py-1 bg-purple-500 text-white text-sm rounded hover:bg-purple-600">
+                                + Rating Scale
+                            </button>
+                            <button type="button" onclick="addQuestion('text')" 
+                                    class="px-3 py-1 bg-gray-500 text-white text-sm rounded hover:bg-gray-600">
+                                + Text Response
+                            </button>
                         </div>
-
-                        <div id="questions-container" class="space-y-4">
+                        
+                        <div id="questions-container">
                             <div class="text-center text-gray-500 py-8 border-2 border-dashed border-gray-300 rounded-lg">
-                                <p>No questions added yet. Click the buttons above to add questions.</p>
+                                <p>No questions added yet. Use the buttons above to add questions.</p>
                             </div>
                         </div>
                     </div>
-                </div>
 
-                <div class="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0">
-                    <button 
-                        type="submit" 
-                        id="submit-survey-btn"
-                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center"
-                    >
-                        <span>Create Survey</span>
-                    </button>
-                    <button 
-                        type="button" 
-                        onclick="hideCreateSurvey()" 
-                        class="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
-                    >
-                        Cancel
-                    </button>
-                </div>
-            </form>
+                    <div class="flex justify-end space-x-4">
+                        <button type="button" onclick="hideCreateSurvey()" 
+                                class="px-6 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50">
+                            Cancel
+                        </button>
+                        <button type="submit" 
+                                class="px-6 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">
+                            Create Survey
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
     <script>
         // Global variables
-        let surveys = [];
+        let socket;
         let questions = [];
-        let currentSurveyResults = null;
-        let socket = null;
-        let connectionRetryCount = 0;
-        const maxRetries = 5;
+        let surveys = [];
 
-        // Utility functions
-        function showLoading(text = 'Loading...') {
-            document.getElementById('loading-text').textContent = text;
-            document.getElementById('loading-overlay').classList.remove('hidden');
+        // Initialize application
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSocket();
+            loadSurveys();
+            setupEventListeners();
+        });
+
+        // Socket.IO connection
+        function initializeSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                updateConnectionStatus('Connected', true);
+            });
+
+            socket.on('disconnect', function() {
+                updateConnectionStatus('Disconnected', false);
+            });
+
+            socket.on('whatsapp-ready', function(isReady) {
+                updateWhatsAppStatus(isReady);
+            });
+
+            socket.on('qr-code', function(data) {
+                displayQRCode(data.qrCode);
+            });
+
+            socket.on('openai-status', function(data) {
+                updateOpenAIStatus(data);
+            });
+
+            socket.on('survey-stats', function(data) {
+                updateStats(data);
+            });
+
+            socket.on('new-response', function(data) {
+                addRecentActivity(`New response from ${data.participant}`, 'success');
+                refreshData();
+            });
         }
 
-        function hideLoading() {
-            document.getElementById('loading-overlay').classList.add('hidden');
-        }
-
-        function showError(message) {
-            document.getElementById('error-message').textContent = message;
-            document.getElementById('error-notification').style.transform = 'translateX(0)';
-            setTimeout(() => {
-                hideError();
-            }, 5000);
-        }
-
-        function hideError() {
-            document.getElementById('error-notification').style.transform = 'translateX(100%)';
-        }
-
-        function showSuccess(message) {
-            document.getElementById('success-message').textContent = message;
-            document.getElementById('success-notification').style.transform = 'translateX(0)';
-            setTimeout(() => {
-                hideSuccess();
-            }, 3000);
-        }
-
-        function hideSuccess() {
-            document.getElementById('success-notification').style.transform = 'translateX(100%)';
-        }
-
-        function updateConnectionStatus(isConnected) {
+        // Status updates
+        function updateConnectionStatus(status, isConnected) {
             const statusEl = document.getElementById('connection-status');
-            const textEl = document.getElementById('connection-text');
+            const dot = statusEl.querySelector('.w-2');
+            const text = statusEl.querySelector('span');
             
             if (isConnected) {
-                statusEl.className = 'status-indicator status-online';
-                textEl.textContent = 'Connected';
+                dot.className = 'w-2 h-2 bg-green-500 rounded-full';
+                text.textContent = status;
+                text.className = 'text-sm text-green-600';
             } else {
-                statusEl.className = 'status-indicator status-offline';
-                textEl.textContent = 'Disconnected';
+                dot.className = 'w-2 h-2 bg-red-500 rounded-full';
+                text.textContent = status;
+                text.className = 'text-sm text-red-600';
             }
         }
 
-        function updateWhatsAppStatus(status) {
-            const statusEl = document.getElementById('whatsapp-status');
-            const textEl = document.getElementById('whatsapp-text');
-            
-            if (status.isReady) {
-                statusEl.className = 'status-indicator status-online';
-                textEl.textContent = 'Connected';
-            } else {
-                statusEl.className = 'status-indicator status-offline';
-                textEl.textContent = 'Disconnected';
-            }
-        }
-
-        // Initialize socket connection
-        function initializeSocket() {
-            try {
-                socket = io();
-                
-                socket.on('connect', () => {
-                    updateConnectionStatus(true);
-                    connectionRetryCount = 0;
-                    console.log('Connected to server');
-                });
-                
-                socket.on('disconnect', () => {
-                    updateConnectionStatus(false);
-                    console.log('Disconnected from server');
-                    
-                    // Retry connection
-                    if (connectionRetryCount < maxRetries) {
-                        connectionRetryCount++;
-                        setTimeout(() => {
-                            socket.connect();
-                        }, 2000 * connectionRetryCount);
-                    }
-                });
-                
-                socket.on('whatsapp-ready', () => {
-                    updateWhatsAppStatus({ isReady: true });
-                    loadStatus();
-                });
-                
-                socket.on('whatsapp-disconnected', () => {
-                    updateWhatsAppStatus({ isReady: false });
-                    loadStatus();
-                });
-                
-                socket.on('qr-code', (data) => {
-                    displayQRCode(data.qrCode);
-                });
-                
-                socket.on('survey-stats', (stats) => {
-                    surveys = stats;
-                    renderSurveys();
-                    updateQuickStats();
-                });
-                
-                socket.on('new-responses', (responses) => {
-                    updateRecentActivity(responses);
-                });
-                
-            } catch (error) {
-                console.error('Failed to initialize socket:', error);
-                updateConnectionStatus(false);
-            }
-        }
-
-        // Navigation functions
-        function showMainDashboard() {
-            document.getElementById('main-dashboard').classList.remove('hidden');
-            document.getElementById('results-view').classList.add('hidden');
-            document.getElementById('back-button').classList.add('hidden');
-        }
-
-        function showResultsView(survey) {
-            document.getElementById('main-dashboard').classList.add('hidden');
-            document.getElementById('results-view').classList.remove('hidden');
-            document.getElementById('back-button').classList.remove('hidden');
-            
-            document.getElementById('results-title').textContent = `Results: ${survey.title}`;
-            document.getElementById('results-subtitle').textContent = `${survey.questions?.length || 0} questions • ${survey.responses || 0} responses`;
-            
-            loadSurveyResults(survey.id);
-        }
-
-        // Status loading functions
-        async function loadStatus() {
-            try {
-                const [whatsappResponse, openaiResponse] = await Promise.all([
-                    fetch('/api/whatsapp/status'),
-                    fetch('/api/openai/status')
-                ]);
-                
-                const whatsappData = await whatsappResponse.json();
-                const openaiData = await openaiResponse.json();
-                
-                displayWhatsAppStatus(whatsappData);
-                displayOpenAIStatus(openaiData);
-                
-            } catch (error) {
-                console.error('Error loading status:', error);
-                showError('Failed to load system status');
-            }
-        }
-
-        function displayWhatsAppStatus(data) {
+        function updateWhatsAppStatus(isReady) {
             const panel = document.getElementById('whatsapp-status-panel');
             
-            if (data.isReady) {
+            if (isReady) {
                 panel.innerHTML = `
-                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <div class="text-green-700 font-semibold mb-2 flex items-center">
-                            <span class="status-indicator status-online"></span>
-                            WhatsApp Connected!
-                        </div>
-                        <div class="text-green-600 text-sm">Bot is ready to receive messages</div>
+                    <div class="flex items-center justify-center space-x-2 text-green-600">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="font-semibold">Connected</span>
                     </div>
+                    <p class="text-sm text-gray-600 mt-2">WhatsApp is ready to send surveys</p>
                 `;
-            } else if (data.qrCode) {
-                displayQRCode(data.qrCode);
             } else {
                 panel.innerHTML = `
-                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                        <div class="text-yellow-700 flex items-center">
-                            <span class="status-indicator status-loading"></span>
-                            Initializing WhatsApp...
-                        </div>
+                    <div class="flex items-center justify-center space-x-2 text-yellow-600">
+                        <div class="loader mr-2"></div>
+                        <span class="font-semibold">Connecting...</span>
                     </div>
+                    <p class="text-sm text-gray-600 mt-2">Please wait for WhatsApp connection</p>
                 `;
             }
         }
@@ -554,145 +361,61 @@
         function displayQRCode(qrCode) {
             const panel = document.getElementById('whatsapp-status-panel');
             panel.innerHTML = `
-                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <div class="text-blue-700 font-semibold mb-4 text-center">📱 Scan QR Code with WhatsApp:</div>
-                    <div class="flex justify-center">
-                        <img src="${qrCode}" alt="WhatsApp QR Code" class="max-w-xs w-full rounded-lg border shadow-sm">
-                    </div>
-                    <div class="text-xs text-blue-600 text-center mt-2">
-                        Open WhatsApp → Settings → Linked Devices → Link a device
-                    </div>
+                <div class="text-center">
+                    <img src="${qrCode}" alt="WhatsApp QR Code" class="mx-auto mb-4 rounded-lg" style="max-width: 200px;">
+                    <p class="text-sm text-gray-600">Scan this QR code with WhatsApp</p>
+                    <p class="text-xs text-gray-500 mt-1">WhatsApp → Settings → Linked Devices → Link a device</p>
                 </div>
             `;
         }
 
-        function displayOpenAIStatus(data) {
+        function updateOpenAIStatus(data) {
             const panel = document.getElementById('openai-status-panel');
             
-            if (data.isConfigured) {
+            if (data.configured) {
                 panel.innerHTML = `
-                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <div class="text-green-700 font-semibold mb-2 flex items-center">
-                            <span class="status-indicator status-online"></span>
-                            Voice AI Enabled
-                        </div>
-                        <div class="text-green-600 text-sm">
-                            🎤 Transcription • 🌍 Translation • 🧠 Smart Summaries
-                        </div>
-                        <button onclick="testOpenAI()" class="mt-3 px-3 py-1 bg-green-100 text-green-700 rounded text-sm hover:bg-green-200">
-                            Test Connection
-                        </button>
+                    <div class="flex items-center justify-center space-x-2 text-green-600">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="font-semibold">Voice Features Active</span>
                     </div>
+                    <p class="text-sm text-gray-600 mt-2">AI voice transcription enabled</p>
                 `;
             } else {
                 panel.innerHTML = `
-                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                        <div class="text-yellow-700 font-semibold mb-2 flex items-center">
-                            <span class="status-indicator status-offline"></span>
-                            OpenAI Not Configured
-                        </div>
-                        <div class="text-yellow-600 text-sm mb-3">
-                            Add OPENAI_API_KEY to enable voice features
-                        </div>
-                        <div class="text-xs text-yellow-600">
-                            Voice transcription, translation, and smart summaries are disabled
-                        </div>
+                    <div class="flex items-center justify-center space-x-2 text-yellow-600">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="font-semibold">Voice Features Disabled</span>
                     </div>
+                    <p class="text-sm text-gray-600 mt-2">OpenAI API key not configured</p>
                 `;
             }
         }
 
-        async function testOpenAI() {
-            showLoading('Testing OpenAI connection...');
+        function updateStats(data) {
+            document.getElementById('total-surveys').textContent = data.totalSurveys || 0;
+            document.getElementById('total-participants').textContent = data.totalParticipants || 0;
+            document.getElementById('total-responses').textContent = data.totalResponses || 0;
+            document.getElementById('active-survey').textContent = data.activeSurvey || 'None';
             
-            try {
-                const response = await fetch('/api/openai/test', { method: 'POST' });
-                const result = await response.json();
-                
-                if (result.success) {
-                    showSuccess('OpenAI connection successful!');
-                } else {
-                    showError(result.message || 'OpenAI connection failed');
-                }
-            } catch (error) {
-                console.error('OpenAI test error:', error);
-                showError('Failed to test OpenAI connection');
-            } finally {
-                hideLoading();
-            }
+            const statsContainer = document.getElementById('quick-stats');
+            statsContainer.classList.remove('hidden');
         }
 
-        // Survey management functions
-        function updateQuickStats() {
-            const totalSurveys = surveys.length;
-            const totalParticipants = surveys.reduce((sum, s) => sum + (s.participants || 0), 0);
-            const totalResponses = surveys.reduce((sum, s) => sum + (s.responses || 0), 0);
-            const activeSurvey = surveys.find(s => s.is_active);
-            
-            document.getElementById('total-surveys').textContent = totalSurveys;
-            document.getElementById('total-participants').textContent = totalParticipants;
-            document.getElementById('total-responses').textContent = totalResponses;
-            document.getElementById('active-survey').textContent = activeSurvey ? activeSurvey.title.substring(0, 20) + (activeSurvey.title.length > 20 ? '...' : '') : 'None';
-            
-            if (totalSurveys > 0) {
-                document.getElementById('quick-stats').classList.remove('hidden');
-            }
-        }
-
-        function updateRecentActivity(responses) {
-            if (responses.length === 0) return;
-            
-            const activityDiv = document.getElementById('recent-activity');
-            const listDiv = document.getElementById('activity-list');
-            
-            listDiv.innerHTML = responses.slice(0, 5).map(response => `
-                <div class="bg-gray-50 rounded-lg p-3 text-sm">
-                    <div class="flex justify-between items-start mb-1">
-                        <span class="font-medium text-gray-900">Participant ${response.participant_survey_code}</span>
-                        <span class="text-gray-500">${new Date(response.created_at).toLocaleTimeString()}</span>
-                    </div>
-                    <div class="text-gray-600">
-                        Q: ${response.question_text.substring(0, 50)}...
-                    </div>
-                    <div class="text-gray-800 font-medium">
-                        A: ${response.answer}
-                    </div>
-                </div>
-            `).join('');
-            
-            activityDiv.classList.remove('hidden');
-        }
-
-        // Continue with the rest of the JavaScript...
-        // [The rest of the functions would continue here - survey creation, results, etc.]
-        // This is getting quite long, so I'll continue in the next parts
-
-        // Initialize the application
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeSocket();
-            loadStatus();
-            loadSurveys();
-            
-            // Refresh data periodically
-            setInterval(() => {
-                if (socket && socket.connected) {
-                    loadStatus();
-                }
-            }, 30000);
-        });
-
-        // Continue with survey management functions...
-        async function loadSurveys() {
-            try {
-                const response = await fetch('/api/surveys');
-                const data = await response.json();
-                surveys = data;
-                renderSurveys();
-                updateQuickStats();
-            } catch (error) {
-                console.error('Error loading surveys:', error);
-                showError('Failed to load surveys');
-            }
+        // Survey management
+        function loadSurveys() {
+            fetch('/api/surveys')
+                .then(response => response.json())
+                .then(data => {
+                    surveys = data;
+                    renderSurveys();
+                })
+                .catch(error => {
+                    console.error('Error loading surveys:', error);
+                });
         }
 
         function renderSurveys() {
@@ -700,7 +423,7 @@
             
             if (surveys.length === 0) {
                 container.innerHTML = `
-                    <div class="text-center text-gray-500 py-8 fade-in">
+                    <div class="text-center text-gray-500 py-8">
                         <div class="text-4xl mb-4">📊</div>
                         <p>No surveys created yet. Click "Create Survey" to get started!</p>
                     </div>
@@ -709,155 +432,289 @@
             }
 
             container.innerHTML = surveys.map(survey => `
-                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow fade-in">
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2">
-                        <h3 class="text-xl font-semibold text-gray-800 mb-2 sm:mb-0">${survey.title}</h3>
-                        <div class="flex items-center space-x-2">
-                            ${survey.is_active ? '<span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">Active</span>' : ''}
-                            <span class="text-sm text-gray-500">${survey.questions?.length || 0} questions</span>
+                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                    <div class="flex items-center justify-between">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-lg text-gray-900">${survey.title}</h3>
+                            <p class="text-sm text-gray-600">${survey.description || 'No description'}</p>
+                            <div class="flex items-center space-x-4 mt-2">
+                                <span class="text-xs text-gray-500">${survey.question_count || 0} questions</span>
+                                <span class="text-xs text-gray-500">Est. ${survey.estimated_time || 'N/A'}</span>
+                                <span class="text-xs px-2 py-1 rounded-full ${survey.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                                    ${survey.is_active ? 'Active' : 'Inactive'}
+                                </span>
+                            </div>
                         </div>
-                    </div>
-                    
-                    ${survey.description ? `<p class="text-gray-600 text-sm mb-3">${survey.description}</p>` : ''}
-                    
-                    <div class="flex items-center space-x-4 text-sm text-gray-600 mb-3">
-                        <span>👥 ${survey.participants || 0} participants</span>
-                        <span>📊 ${survey.responses || 0} responses</span>
-                        <span>⏱️ ~${survey.estimated_time}</span>
-                        ${survey.completions ? `<span>✅ ${survey.completions} completed</span>` : ''}
-                    </div>
-
-                    <div class="flex flex-wrap gap-2">
-                        <button 
-                            onclick="activateSurvey('${survey.id}')"
-                            ${survey.is_active ? 'disabled' : ''}
-                            class="px-3 py-1 ${survey.is_active ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'} text-white rounded text-sm transition-colors"
-                        >
-                            ${survey.is_active ? 'Active' : 'Activate'}
-                        </button>
-                        <button 
-                            onclick="showResultsView(surveys.find(s => s.id === '${survey.id}'))"
-                            class="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 transition-colors"
-                        >
-                            View Results
-                        </button>
-                        <button 
-                            onclick="exportSurveyById('${survey.id}')"
-                            class="px-3 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600 transition-colors"
-                        >
-                            Export Data
-                        </button>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="toggleSurvey('${survey.id}', ${!survey.is_active})" 
+                                    class="px-3 py-1 text-sm rounded ${survey.is_active ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-green-500 hover:bg-green-600 text-white'}">
+                                ${survey.is_active ? 'Deactivate' : 'Activate'}
+                            </button>
+                            <button onclick="exportSurvey('${survey.id}')" 
+                                    class="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
+                                Export
+                            </button>
+                        </div>
                     </div>
                 </div>
             `).join('');
         }
 
-        // Survey creation functions
+        // Survey creation
         function showCreateSurvey() {
-            document.getElementById('create-survey-modal').classList.remove('hidden');
+            document.getElementById('create-survey-modal').classList.add('show');
             questions = [];
             renderQuestions();
         }
 
         function hideCreateSurvey() {
-            document.getElementById('create-survey-modal').classList.add('hidden');
+            document.getElementById('create-survey-modal').classList.remove('show');
             document.getElementById('survey-form').reset();
             questions = [];
+        }
+
+        function addQuestion(type) {
+            const question = {
+                id: Date.now(),
+                type: type,
+                question: '',
+                options: type === 'multiple' ? ['Option 1', 'Option 2'] : 
+                        type === 'curated' ? ['Agree', 'Neutral', 'Disagree'] : [],
+                scale: type === 'likert' ? { min: 1, max: 5, labels: ['Poor', 'Excellent'] } : null
+            };
+            
+            questions.push(question);
             renderQuestions();
         }
 
-        // Additional survey functions would continue here...
-        // For brevity, I'll provide the key remaining functions
+        function removeQuestion(questionId) {
+            questions = questions.filter(q => q.id !== questionId);
+            renderQuestions();
+        }
 
-        // Initialize on page load
-        window.addEventListener('load', function() {
-            // Hide loading overlay if still visible
-            hideLoading();
-        });
-
-        // Handle form submission
-        document.getElementById('survey-form').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const title = document.getElementById('survey-title').value.trim();
-            const description = document.getElementById('survey-description').value.trim();
-            const estimatedTime = document.getElementById('survey-time').value.trim();
-            
-            if (!title) {
-                showError('Survey title is required');
-                return;
-            }
+        function renderQuestions() {
+            const container = document.getElementById('questions-container');
             
             if (questions.length === 0) {
-                showError('Please add at least one question to your survey');
+                container.innerHTML = `
+                    <div class="text-center text-gray-500 py-8 border-2 border-dashed border-gray-300 rounded-lg">
+                        <p>No questions added yet. Use the buttons above to add questions.</p>
+                    </div>
+                `;
                 return;
             }
 
-            // Validate questions
-            for (let i = 0; i < questions.length; i++) {
-                const question = questions[i];
-                if (!question.question.trim()) {
-                    showError(`Question ${i + 1} text is required`);
-                    return;
-                }
-                if (question.type === 'multiple' && (!question.options || question.options.some(opt => !opt.trim()))) {
-                    showError(`Question ${i + 1} needs valid options`);
-                    return;
-                }
+            container.innerHTML = questions.map((question, index) => `
+                <div class="border border-gray-200 rounded-lg p-4 mb-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <h5 class="font-medium text-gray-900">Question ${index + 1} (${question.type})</h5>
+                        <button onclick="removeQuestion(${question.id})" 
+                                class="text-red-500 hover:text-red-700">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <input type="text" 
+                               placeholder="Enter your question..." 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               value="${question.question}"
+                               onchange="updateQuestion(${question.id}, 'question', this.value)">
+                    </div>
+                    
+                    ${question.type === 'multiple' ? `
+                        <div class="space-y-2">
+                            ${question.options.map((option, optIndex) => `
+                                <div class="flex items-center space-x-2">
+                                    <input type="text" 
+                                           class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                           value="${option}"
+                                           onchange="updateOption(${question.id}, ${optIndex}, this.value)">
+                                    ${question.options.length > 1 ? `
+                                        <button onclick="removeOption(${question.id}, ${optIndex})" 
+                                                class="text-red-500 hover:text-red-700">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                            </svg>
+                                        </button>
+                                    ` : ''}
+                                </div>
+                            `).join('')}
+                            <button onclick="addOption(${question.id})" 
+                                    class="text-blue-500 hover:text-blue-700 text-sm">
+                                + Add Option
+                            </button>
+                        </div>
+                    ` : ''}
+                    
+                    ${question.type === 'likert' ? `
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Min Value</label>
+                                <input type="number" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                       value="${question.scale.min}"
+                                       onchange="updateScale(${question.id}, 'min', this.value)">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Max Value</label>
+                                <input type="number" 
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                       value="${question.scale.max}"
+                                       onchange="updateScale(${question.id}, 'max', this.value)">
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function updateQuestion(questionId, field, value) {
+            const question = questions.find(q => q.id === questionId);
+            if (question) {
+                question[field] = value;
             }
+        }
 
-            const submitBtn = document.getElementById('submit-survey-btn');
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<div class="loader mr-2"></div>Creating...';
+        function addOption(questionId) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'multiple') {
+                question.options.push(`Option ${question.options.length + 1}`);
+                renderQuestions();
+            }
+        }
 
-            try {
-                const response = await fetch('/api/surveys', {
+        function removeOption(questionId, optionIndex) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'multiple' && question.options.length > 1) {
+                question.options.splice(optionIndex, 1);
+                renderQuestions();
+            }
+        }
+
+        function updateOption(questionId, optionIndex, value) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'multiple') {
+                question.options[optionIndex] = value;
+            }
+        }
+
+        function updateScale(questionId, field, value) {
+            const question = questions.find(q => q.id === questionId);
+            if (question && question.type === 'likert') {
+                question.scale[field] = field === 'min' || field === 'max' ? parseInt(value) : value;
+            }
+        }
+
+        // Survey actions
+        function toggleSurvey(surveyId, activate) {
+            fetch(`/api/surveys/${surveyId}/${activate ? 'activate' : 'deactivate'}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadSurveys();
+                    addRecentActivity(`Survey ${activate ? 'activated' : 'deactivated'}`, 'success');
+                }
+            })
+            .catch(error => {
+                console.error('Error toggling survey:', error);
+            });
+        }
+
+        function exportSurvey(surveyId) {
+            window.open(`/api/surveys/${surveyId}/export`, '_blank');
+        }
+
+        // Form submission
+        function setupEventListeners() {
+            document.getElementById('survey-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const formData = new FormData(this);
+                const surveyData = {
+                    title: formData.get('title'),
+                    description: formData.get('description'),
+                    estimatedTime: formData.get('estimatedTime'),
+                    questions: questions.filter(q => q.question.trim() !== '')
+                };
+
+                if (surveyData.questions.length === 0) {
+                    alert('Please add at least one question.');
+                    return;
+                }
+
+                fetch('/api/surveys', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: title,
-                        description: description,
-                        estimatedTime: estimatedTime,
-                        questions: questions.map((q, index) => ({
-                            id: index + 1,
-                            type: q.type,
-                            question: q.question,
-                            options: q.type === 'curated' ? ['Agree', 'Undecided', 'Disagree'] : q.options,
-                            scale: q.scale
-                        }))
-                    })
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(surveyData)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        hideCreateSurvey();
+                        loadSurveys();
+                        addRecentActivity(`Survey "${surveyData.title}" created`, 'success');
+                    } else {
+                        alert('Error creating survey: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error creating survey:', error);
+                    alert('Error creating survey');
                 });
+            });
+        }
 
-                if (response.ok) {
-                    const survey = await response.json();
-                    surveys.push(survey);
-                    renderSurveys();
-                    updateQuickStats();
-                    hideCreateSurvey();
-                    showSuccess('Survey created successfully!');
-                } else {
-                    const error = await response.json();
-                    showError(error.error || 'Failed to create survey');
-                }
-            } catch (error) {
-                console.error('Error creating survey:', error);
-                showError('Network error. Please check your connection and try again.');
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = '<span>Create Survey</span>';
-            }
-        });
-
-        // Error handling for network issues
-        window.addEventListener('online', function() {
-            showSuccess('Connection restored');
-            loadStatus();
+        // Utility functions
+        function refreshData() {
             loadSurveys();
-        });
+            // You can add more refresh logic here
+        }
 
-        window.addEventListener('offline', function() {
-            showError('No internet connection');
-        });
+        function addRecentActivity(message, type) {
+            const container = document.getElementById('recent-activity');
+            const activity = document.createElement('div');
+            activity.className = `flex items-center space-x-2 p-2 rounded ${type === 'success' ? 'bg-green-50' : 'bg-red-50'}`;
+            activity.innerHTML = `
+                <div class="w-2 h-2 rounded-full ${type === 'success' ? 'bg-green-500' : 'bg-red-500'}"></div>
+                <span class="text-sm ${type === 'success' ? 'text-green-800' : 'text-red-800'}">${message}</span>
+                <span class="text-xs text-gray-500">${new Date().toLocaleTimeString()}</span>
+            `;
+            
+            if (container.children.length === 1 && container.textContent.includes('No recent activity')) {
+                container.innerHTML = '';
+            }
+            
+            container.insertBefore(activity, container.firstChild);
+            
+            // Keep only last 5 activities
+            while (container.children.length > 5) {
+                container.removeChild(container.lastChild);
+            }
+        }
+
+        function testOpenAI() {
+            fetch('/api/openai/test', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    addRecentActivity('OpenAI connection test successful', 'success');
+                } else {
+                    addRecentActivity('OpenAI connection test failed', 'error');
+                }
+            })
+            .catch(error => {
+                addRecentActivity('OpenAI connection test failed', 'error');
+            });
+        }
     </script>
 </body>
 </html>
