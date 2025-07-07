@@ -57,36 +57,20 @@ const io = socketIo(server, {
 // Security middleware with Socket.IO compatibility
 app.use(helmet({
   contentSecurityPolicy: {
+    useDefaults: false,
     directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: [
-        "'self'", 
-        "'unsafe-eval'",  // Required for some libraries
-        "https://cdn.tailwindcss.com", 
-        "https://cdnjs.cloudflare.com"
-      ],
-      styleSrc: [
-        "'self'", 
-        "'unsafe-inline'",  // Required for Tailwind
-        "https://cdn.tailwindcss.com"
-      ],
-      imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: [
-        "'self'", 
-        "ws:", 
-        "wss:", 
-        "http:", 
-        "https:",
-        "*.onrender.com"  // Allow Render.com connections
-      ],
-      fontSrc: ["'self'", "https:", "data:"],
+      defaultSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:", "http:", "data:", "ws:", "wss:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:", "http:"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:", "http:"],
+      imgSrc: ["'self'", "data:", "https:", "http:"],
+      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+      fontSrc: ["'self'", "https:", "http:", "data:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
       frameSrc: ["'none'"],
     }
   }
 }));
-
 // CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
