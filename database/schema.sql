@@ -4,6 +4,14 @@
 -- Enable UUID extension for unique identifiers
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Drop existing tables if needed (comment out in production)
+-- DROP TABLE IF EXISTS responses CASCADE;
+-- DROP TABLE IF EXISTS sessions CASCADE;
+-- DROP TABLE IF EXISTS survey_participants CASCADE;
+-- DROP TABLE IF EXISTS questions CASCADE;
+-- DROP TABLE IF EXISTS participants CASCADE;
+-- DROP TABLE IF EXISTS surveys CASCADE;
+
 -- Surveys table
 CREATE TABLE IF NOT EXISTS surveys (
     id VARCHAR(50) PRIMARY KEY,
@@ -75,13 +83,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indexes for better performance
-CREATE INDEX idx_surveys_active ON surveys(is_active);
-CREATE INDEX idx_responses_survey ON responses(survey_id);
-CREATE INDEX idx_responses_participant ON responses(participant_id);
-CREATE INDEX idx_survey_participants_survey ON survey_participants(survey_id);
-CREATE INDEX idx_survey_participants_completed ON survey_participants(is_completed);
-CREATE INDEX idx_sessions_phone ON sessions(phone_number);
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_surveys_active ON surveys(is_active);
+CREATE INDEX IF NOT EXISTS idx_responses_survey ON responses(survey_id);
+CREATE INDEX IF NOT EXISTS idx_responses_participant ON responses(participant_id);
+CREATE INDEX IF NOT EXISTS idx_survey_participants_survey ON survey_participants(survey_id);
+CREATE INDEX IF NOT EXISTS idx_survey_participants_completed ON survey_participants(is_completed);
+CREATE INDEX IF NOT EXISTS idx_sessions_phone ON sessions(phone_number);
 
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -93,31 +101,13 @@ END;
 $$ language 'plpgsql';
 
 -- Triggers for updated_at
+DROP TRIGGER IF EXISTS update_surveys_updated_at ON surveys;
 CREATE TRIGGER update_surveys_updated_at BEFORE UPDATE ON surveys
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_sessions_updated_at ON sessions;
 CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- View for survey statistics
-CREATE OR REPLACE VIEW survey_statistics AS
-SELECT 
-    s.id,
-    s.title,
-    s.is_active,
-    COUNT(DISTINCT sp.participant_id) as total_participants,
-    COUNT(DISTINCT CASE WHEN sp.is_completed THEN sp.participant_id END) as completed_participants,
-    COUNT(DISTINCT r.id) as total_responses,
-    CASE 
-        WHEN COUNT(DISTINCT sp.participant_id) > 0 
-        THEN ROUND(100.0 * COUNT(DISTINCT CASE WHEN sp.is_completed THEN sp.participant_id END) / COUNT(DISTINCT sp.participant_id), 2)
-        ELSE 0
-    END as completion_rate,
-    AVG(sp.completion_duration_seconds) as avg_completion_seconds
-FROM surveys s
-LEFT JOIN survey_participants sp ON s.id = sp.survey_id
-LEFT JOIN responses r ON s.id = r.survey_id
-GROUP BY s.id, s.title, s.is_active;
 
 -- Function to generate next participant code for a survey
 CREATE OR REPLACE FUNCTION get_next_participant_code(survey_id_param VARCHAR(50))
@@ -140,8 +130,22 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Initial data (optional)
--- This creates a default inactive survey as an example
-INSERT INTO surveys (id, title, estimated_time, participant_prefix) 
-VALUES ('default-survey', 'Sample Survey', '3-5 minutes', 'SAMPLE')
-ON CONFLICT (id) DO NOTHING;
+-- View for survey statistics
+CREATE OR REPLACE VIEW survey_statistics AS
+SELECT 
+    s.id,
+    s.title,
+    s.is_active,
+    COUNT(DISTINCT sp.participant_id) as total_participants,
+    COUNT(DISTINCT CASE WHEN sp.is_completed THEN sp.participant_id END) as completed_participants,
+    COUNT(DISTINCT r.id) as total_responses,
+    CASE 
+        WHEN COUNT(DISTINCT sp.participant_id) > 0 
+        THEN ROUND(100.0 * COUNT(DISTINCT CASE WHEN sp.is_completed THEN sp.participant_id END) / COUNT(DISTINCT sp.participant_id), 2)
+        ELSE 0
+    END as completion_rate,
+    AVG(sp.completion_duration_seconds) as avg_completion_seconds
+FROM surveys s
+LEFT JOIN survey_participants sp ON s.id = sp.survey_id
+LEFT JOIN responses r ON s.id = r.survey_id
+GROUP BY s.id, s.title, s.is_active;
