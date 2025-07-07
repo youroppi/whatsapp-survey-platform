@@ -350,6 +350,36 @@ async function createSurvey(surveyData) {
       .replace(/[^A-Z0-9]/g, '')
       .substring(0, 10) || 'SURVEY';
     
+    // Check for recent duplicate (within 5 seconds with same title)
+    const duplicateCheck = await dbClient.query(
+      `SELECT id FROM surveys 
+       WHERE title = $1 
+       AND created_at > NOW() - INTERVAL '5 seconds'
+       LIMIT 1`,
+      [surveyData.title]
+    );
+    
+    if (duplicateCheck.rows.length > 0) {
+      console.log('Duplicate survey detected, returning existing survey');
+      await dbClient.query('ROLLBACK');
+      
+      // Return the existing survey
+      const existing = await dbClient.query(
+        `SELECT s.*, 
+                COUNT(q.id) as question_count
+         FROM surveys s
+         LEFT JOIN questions q ON s.id = q.survey_id
+         WHERE s.id = $1
+         GROUP BY s.id`,
+        [duplicateCheck.rows[0].id]
+      );
+      
+      return {
+        ...existing.rows[0],
+        questions: surveyData.questions
+      };
+    }
+    
     // Insert survey
     await dbClient.query(
       `INSERT INTO surveys (id, title, description, estimated_time, participant_prefix) 
@@ -478,19 +508,25 @@ async function getOrCreateSession(phoneNumber, activeSurvey) {
       };
     }
     
-    // Create new session
+    // Create new session with proper defaults
+    const initialSessionData = JSON.stringify({});
+    
     result = await dbClient.query(
       `INSERT INTO sessions (phone_number, survey_id, participant_id, session_data, current_question, stage)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [phoneNumber, activeSurvey.id, participant.id, JSON.stringify({}), 0, 'initial']
+      [phoneNumber, activeSurvey.id, participant.id, initialSessionData, 0, 'initial']
     );
     
+    const newSession = result.rows[0];
     return {
-      ...result.rows[0],
+      ...newSession,
       sessionData: {},
       session_data: {}
     };
+  } catch (error) {
+    console.error('Error in getOrCreateSession:', error);
+    throw error;
   } finally {
     dbClient.release();
   }
@@ -579,29 +615,40 @@ async function handleWhatsAppMessage(message) {
 }
 
 async function handleInitialMessage(phoneNumber, session, survey) {
-  // Get or create survey participant
-  const participantCode = await getOrCreateSurveyParticipant(survey.id, session.participant_id);
-  
-  // Update session
-  await updateSession(session.id, {
-    stage: 'survey',
-    sessionData: { participantCode }
-  });
-  
-  // Send welcome message (without participant ID)
-  let welcomeMessage = `Welcome to our survey! 📊\n\n*${survey.title}*\n\n`;
-  
-  // Add custom description if available
-  if (survey.description && survey.description.trim()) {
-    welcomeMessage += `${survey.description}\n\n`;
+  try {
+    // Get or create survey participant
+    const participantCode = await getOrCreateSurveyParticipant(survey.id, session.participant_id);
+    
+    // Update session with proper session data
+    const sessionData = {
+      participantCode: participantCode
+    };
+    
+    await updateSession(session.id, {
+      stage: 'survey',
+      sessionData: sessionData
+    });
+    
+    // Send welcome message (without participant ID)
+    let welcomeMessage = `Welcome to our survey! 📊\n\n*${survey.title}*\n\n`;
+    
+    // Add custom description if available
+    if (survey.description && survey.description.trim()) {
+      welcomeMessage += `${survey.description}\n\n`;
+    }
+    
+    welcomeMessage += `This will take about ${survey.estimated_time || '3-5'} minutes. Let's get started!`;
+    
+    await client.sendMessage(phoneNumber, welcomeMessage);
+    await sendCurrentQuestion(phoneNumber, session, survey);
+    
+    broadcastSurveyStats();
+  } catch (error) {
+    console.error('Error in handleInitialMessage:', error);
+    await client.sendMessage(phoneNumber, 
+      "Sorry, there was an error starting the survey. Please try again later."
+    );
   }
-  
-  welcomeMessage += `This will take about ${survey.estimated_time || '3-5'} minutes. Let's get started!`;
-  
-  await client.sendMessage(phoneNumber, welcomeMessage);
-  await sendCurrentQuestion(phoneNumber, session, survey);
-  
-  broadcastSurveyStats();
 }
 
 async function sendCurrentQuestion(phoneNumber, session, survey) {
@@ -984,6 +1031,21 @@ app.get('/api/surveys', async (req, res) => {
 // Create new survey
 app.post('/api/surveys', async (req, res) => {
   try {
+    // Simple rate limiting - prevent creating surveys too quickly
+    const clientIp = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    
+    if (!global.surveyCreationTimestamps) {
+      global.surveyCreationTimestamps = new Map();
+    }
+    
+    const lastCreation = global.surveyCreationTimestamps.get(clientIp);
+    if (lastCreation && now - lastCreation < 2000) { // 2 second cooldown
+      return res.status(429).json({ error: 'Please wait before creating another survey' });
+    }
+    
+    global.surveyCreationTimestamps.set(clientIp, now);
+    
     const survey = await createSurvey(req.body);
     res.json(survey);
     broadcastSurveyStats();
