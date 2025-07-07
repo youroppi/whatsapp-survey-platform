@@ -1,7 +1,6 @@
 // database-setup.js - Complete WhatsApp Survey Platform Database Setup
 // This script creates all required tables and indexes
 // Usage: node database-setup.js
-
 require('dotenv').config();
 const { Pool } = require('pg');
 
