@@ -194,7 +194,7 @@
                 <div class="flex space-x-4">
                     <button 
                         type="submit" 
-                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
                     >
                         Create Survey
                     </button>
@@ -230,6 +230,7 @@
         });
 
         socket.on('survey-stats', (stats) => {
+            // Update surveys array with server data
             surveys = stats;
             renderSurveys();
         });
@@ -589,6 +590,7 @@ All responses are confidential and will be used solely for course improvement pu
         function hideCreateSurvey() {
             document.getElementById('create-survey-modal').classList.add('hidden');
             document.getElementById('survey-form').reset();
+            document.getElementById('survey-description').value = ''; // Explicitly clear description
             questions = [];
             renderQuestions();
         }
@@ -805,8 +807,18 @@ All responses are confidential and will be used solely for course improvement pu
         }
 
         // Handle form submission
+        let isSubmitting = false; // Prevent double submission
+        
         document.getElementById('survey-form').addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            // Prevent double submission
+            if (isSubmitting) {
+                return;
+            }
+            
+            const submitButton = e.target.querySelector('button[type="submit"]');
+            const originalButtonText = submitButton.textContent;
             
             const title = document.getElementById('survey-title').value;
             const description = document.getElementById('survey-description').value;
@@ -830,6 +842,11 @@ All responses are confidential and will be used solely for course improvement pu
             }
 
             try {
+                // Set submitting flag and disable button
+                isSubmitting = true;
+                submitButton.disabled = true;
+                submitButton.textContent = 'Creating...';
+                
                 const response = await fetch('/api/surveys', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -849,16 +866,22 @@ All responses are confidential and will be used solely for course improvement pu
 
                 if (response.ok) {
                     const survey = await response.json();
-                    surveys.push(survey);
-                    renderSurveys();
+                    // Don't add to local array - let the refresh handle it
                     hideCreateSurvey();
                     alert('Survey created successfully!');
+                    // Reload surveys from server to ensure consistency
+                    await loadSurveys();
                 } else {
-                    alert('Error creating survey. Please try again.');
+                    throw new Error('Failed to create survey');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('Error creating survey. Please check your connection.');
+                alert('Error creating survey. Please try again.');
+            } finally {
+                // Reset button and flag
+                isSubmitting = false;
+                submitButton.disabled = false;
+                submitButton.textContent = originalButtonText;
             }
         });
 
@@ -866,7 +889,12 @@ All responses are confidential and will be used solely for course improvement pu
         function renderSurveys() {
             const container = document.getElementById('surveys-list');
             
-            if (surveys.length === 0) {
+            // Remove duplicates based on survey ID
+            const uniqueSurveys = surveys.filter((survey, index, self) =>
+                index === self.findIndex(s => s.id === survey.id)
+            );
+            
+            if (uniqueSurveys.length === 0) {
                 container.innerHTML = `
                     <div class="text-center text-gray-500 py-8">
                         <div class="text-4xl mb-4">📊</div>
@@ -876,7 +904,7 @@ All responses are confidential and will be used solely for course improvement pu
                 return;
             }
 
-            container.innerHTML = surveys.map(survey => `
+            container.innerHTML = uniqueSurveys.map(survey => `
                 <div class="border border-gray-200 rounded-lg p-4">
                     <div class="flex items-center justify-between mb-2">
                         <h3 class="text-xl font-semibold text-gray-800">${survey.title}</h3>
@@ -969,7 +997,11 @@ All responses are confidential and will be used solely for course improvement pu
             try {
                 const response = await fetch('/api/surveys');
                 const data = await response.json();
-                surveys = data;
+                // Ensure no duplicates
+                const uniqueData = data.filter((survey, index, self) =>
+                    index === self.findIndex(s => s.id === survey.id)
+                );
+                surveys = uniqueData;
                 renderSurveys();
             } catch (error) {
                 console.error('Error loading surveys:', error);
