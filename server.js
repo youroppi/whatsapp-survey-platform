@@ -1,5 +1,5 @@
-// server.js - Complete WhatsApp Survey Platform Server with All Features
-// Includes voice follow-up validation and real-time analytics
+// server.js - Complete WhatsApp Survey Platform Server with All Fixes
+// Includes working voice transcription and CSV export
 
 require('dotenv').config();
 
@@ -144,7 +144,7 @@ let connectedClients = new Set();
 let activeSurveys = new Map();
 let isOpenAIConfigured = false;
 
-// Initialize WhatsApp client
+// Initialize WhatsApp client with enhanced media handling
 function initializeWhatsApp() {
   try {
     client = new Client({
@@ -158,9 +158,15 @@ function initializeWhatsApp() {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-gpu',
+          // Add these for better media handling
+          '--disable-web-security',
+          '--disable-features=IsolateOrigins',
+          '--disable-site-isolation-trials'
         ]
-      }
+      },
+      // Add this for better media handling
+      bypassCSP: true // Bypass content security policy
     });
 
     client.on('qr', async (qr) => {
@@ -199,6 +205,23 @@ function initializeWhatsApp() {
 
     client.on('message', async (message) => {
       if (message.from.endsWith('@c.us')) {
+        // Enhanced logging for debugging
+        logger.info(`Message received:`, {
+          from: message.from,
+          type: message.type,
+          hasMedia: message.hasMedia,
+          body: message.body.substring(0, 50) // First 50 chars
+        });
+        
+        // If it's a voice message, log more details
+        if (message.type === 'ptt') {
+          logger.info('Voice message details:', {
+            duration: message.duration,
+            hasMedia: message.hasMedia,
+            isForwarded: message.isForwarded
+          });
+        }
+        
         await handleWhatsAppMessage(message);
       }
     });
@@ -414,7 +437,62 @@ async function sendQuestion(session, message) {
   }
 }
 
-// Fixed processResponse function with duplicate handling
+// Enhanced voice transcription with better error handling
+async function transcribeVoice(media) {
+  if (!process.env.OPENAI_API_KEY) {
+    logger.error('OpenAI API key not configured');
+    return null;
+  }
+  
+  try {
+    logger.info('Starting voice transcription...');
+    
+    // Ensure we have valid media data
+    if (!media || !media.data) {
+      logger.error('No media data received');
+      return null;
+    }
+    
+    const formData = new FormData();
+    
+    // Convert base64 to buffer and append with proper mime type
+    const audioBuffer = Buffer.from(media.data, 'base64');
+    
+    // WhatsApp voice messages are usually in ogg format
+    formData.append('file', audioBuffer, {
+      filename: 'audio.ogg',
+      contentType: media.mimetype || 'audio/ogg'
+    });
+    formData.append('model', 'whisper-1');
+    
+    logger.info(`Sending audio to OpenAI (size: ${audioBuffer.length} bytes, type: ${media.mimetype})`);
+    
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        ...formData.getHeaders()
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      logger.error(`OpenAI API error: ${response.status} - ${errorData}`);
+      return null;
+    }
+    
+    const result = await response.json();
+    logger.info(`Transcription successful: "${result.text}"`);
+    return result.text;
+    
+  } catch (error) {
+    logger.error('Voice transcription failed:', error);
+    return null;
+  }
+}
+
+// Fixed processResponse function with duplicate handling and enhanced voice support
 async function processResponse(session, message) {
   const client = await pool.connect();
   try {
@@ -445,45 +523,60 @@ async function processResponse(session, message) {
     let followUpComment = null;
     let voiceMetadata = null;
     
-    // Handle voice messages
+    // Handle voice messages with enhanced error handling
     if (message.hasMedia && message.type === 'ptt') {
-      const media = await message.downloadMedia();
-      if (isOpenAIConfigured) {
-        const transcription = await transcribeVoice(media);
-        if (transcription) {
-          answer = transcription;
-          voiceMetadata = { 
-            duration: message.duration || 0,
-            transcribed: true,
-            originalTranscription: transcription
-          };
+      logger.info('Processing voice message...');
+      
+      try {
+        const media = await message.downloadMedia();
+        logger.info(`Downloaded voice message: ${media.mimetype}, size: ${media.data.length}`);
+        
+        if (isOpenAIConfigured) {
+          const transcription = await transcribeVoice(media);
           
-          // Store transcription in session for confirmation
-          await client.query(
-            `UPDATE sessions 
-             SET session_data = jsonb_set(
-               COALESCE(session_data, '{}'), 
-               '{pendingVoiceResponse}', 
-               $1::jsonb
-             ),
-             stage = 'voice_confirmation'
-             WHERE id = $2`,
-            [JSON.stringify({ 
-              answer, 
-              questionId: question.id, 
-              voiceMetadata,
-              questionType: question.question_type 
-            }), session.id]
-          );
-          
-          // Ask for confirmation
-          await message.reply(`I heard: "${answer}"\n\nIs this correct?\n1. Yes\n2. No, let me try again`);
-          return;
+          if (transcription) {
+            answer = transcription;
+            voiceMetadata = { 
+              duration: message.duration || 0,
+              transcribed: true,
+              originalTranscription: transcription,
+              mimetype: media.mimetype
+            };
+            
+            // Store transcription in session for confirmation
+            await client.query(
+              `UPDATE sessions 
+               SET session_data = jsonb_set(
+                 COALESCE(session_data, '{}'), 
+                 '{pendingVoiceResponse}', 
+                 $1::jsonb
+               ),
+               stage = 'voice_confirmation'
+               WHERE id = $2`,
+              [JSON.stringify({ 
+                answer, 
+                questionId: question.id, 
+                voiceMetadata,
+                questionType: question.question_type 
+              }), session.id]
+            );
+            
+            // Ask for confirmation
+            await message.reply(`I heard: "${answer}"\n\nIs this correct?\n1. Yes\n2. No, let me try again`);
+            return;
+          } else {
+            logger.warn('Transcription returned empty result');
+            await message.reply('Sorry, I couldn\'t understand the voice message. Please try again or type your response.');
+            return;
+          }
         } else {
-          answer = 'Voice message (transcription failed)';
+          await message.reply('Voice transcription is not available. Please type your response instead.');
+          return;
         }
-      } else {
-        answer = 'Voice message (transcription not available)';
+      } catch (error) {
+        logger.error('Error processing voice message:', error);
+        await message.reply('Sorry, there was an error processing your voice message. Please try again or type your response.');
+        return;
       }
     }
     
@@ -749,41 +842,6 @@ async function completeSurvey(session, message) {
   }
 }
 
-// Voice transcription with OpenAI
-async function transcribeVoice(media) {
-  if (!process.env.OPENAI_API_KEY) {
-    return null;
-  }
-  
-  try {
-    const formData = new FormData();
-    formData.append('file', Buffer.from(media.data, 'base64'), {
-      filename: 'audio.ogg',
-      contentType: 'audio/ogg'
-    });
-    formData.append('model', 'whisper-1');
-    
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        ...formData.getHeaders()
-      },
-      body: formData
-    });
-    
-    if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    return result.text;
-  } catch (error) {
-    logger.error('Voice transcription failed', error);
-    return null;
-  }
-}
-
 // Load active surveys
 async function loadActiveSurveys() {
   const client = await pool.connect();
@@ -966,23 +1024,40 @@ app.get('/api/surveys/:id/responses', async (req, res) => {
   }
 });
 
-// Export survey data
+// Export survey data as CSV - FIXED VERSION
 app.get('/api/surveys/:id/export', async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     
+    // First get survey details
+    const surveyResult = await client.query(
+      'SELECT title FROM surveys WHERE id = $1',
+      [id]
+    );
+    
+    if (surveyResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Survey not found' });
+    }
+    
+    const surveyTitle = surveyResult.rows[0].title;
+    
+    // Get all responses with full details
     const result = await client.query(`
       SELECT 
         p.participant_code,
         p.phone_number,
+        q.question_number,
+        q.question_type,
         q.question_text,
         r.answer,
         r.follow_up_comment,
-        r.created_at,
+        r.voice_metadata,
+        r.created_at as response_time,
         sp.started_at,
         sp.completed_at,
-        sp.is_completed
+        sp.is_completed,
+        sp.completion_duration_seconds
       FROM responses r
       JOIN participants p ON r.participant_id = p.id
       JOIN questions q ON r.question_id = q.id
@@ -991,17 +1066,69 @@ app.get('/api/surveys/:id/export', async (req, res) => {
       ORDER BY p.participant_code, q.question_number
     `, [id]);
     
-    res.json(result.rows.map(row => ({
-      participant_code: row.participant_code,
-      phone_number: row.phone_number,
-      question: row.question_text,
-      answer: row.answer,
-      follow_up_comment: row.follow_up_comment,
-      response_time: row.created_at,
-      started_at: row.started_at,
-      completed_at: row.completed_at,
-      is_completed: row.is_completed
-    })));
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No responses found for this survey' });
+    }
+    
+    // Create CSV content
+    const csvRows = [];
+    
+    // Headers
+    const headers = [
+      'Participant Code',
+      'Phone Number',
+      'Question Number',
+      'Question Type',
+      'Question',
+      'Answer',
+      'Follow-up Comment',
+      'Was Voice Response',
+      'Response Time',
+      'Survey Started',
+      'Survey Completed',
+      'Completion Status',
+      'Duration (seconds)'
+    ];
+    
+    csvRows.push(headers.join(','));
+    
+    // Data rows
+    result.rows.forEach(row => {
+      const voiceMetadata = row.voice_metadata ? 
+        (typeof row.voice_metadata === 'string' ? JSON.parse(row.voice_metadata) : row.voice_metadata) : null;
+      const isVoiceResponse = voiceMetadata && voiceMetadata.transcribed ? 'Yes' : 'No';
+      
+      const csvRow = [
+        row.participant_code,
+        row.phone_number,
+        row.question_number,
+        row.question_type,
+        `"${(row.question_text || '').replace(/"/g, '""')}"`, // Escape quotes in question text
+        `"${(row.answer || '').replace(/"/g, '""')}"`, // Escape quotes in answer
+        `"${(row.follow_up_comment || '').replace(/"/g, '""')}"`, // Escape quotes in follow-up
+        isVoiceResponse,
+        new Date(row.response_time).toISOString(),
+        row.started_at ? new Date(row.started_at).toISOString() : '',
+        row.completed_at ? new Date(row.completed_at).toISOString() : '',
+        row.is_completed ? 'Completed' : 'In Progress',
+        row.completion_duration_seconds || ''
+      ];
+      
+      csvRows.push(csvRow.join(','));
+    });
+    
+    // Create CSV content
+    const csvContent = csvRows.join('\n');
+    
+    // Set headers for file download
+    const filename = `survey_${surveyTitle.replace(/[^a-z0-9]/gi, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    
+    // Send CSV file
+    res.send(csvContent);
+    
+    logger.info(`Exported ${result.rows.length} responses for survey ${id}`);
     
   } catch (error) {
     logger.error('Error exporting survey data', error);
@@ -1043,26 +1170,59 @@ app.get('/api/openai/status', (req, res) => {
   });
 });
 
-// Test OpenAI connection
+// Enhanced OpenAI test endpoint
 app.post('/api/openai/test', async (req, res) => {
-  if (!process.env.OPENAI_API_KEY) {
-    return res.json({ success: false, error: 'OpenAI API key not configured' });
+  const apiKey = process.env.OPENAI_API_KEY;
+  
+  if (!apiKey) {
+    return res.json({ 
+      success: false, 
+      error: 'OPENAI_API_KEY not found in environment variables',
+      configured: false 
+    });
   }
   
   try {
+    // Test the API key format
+    if (!apiKey.startsWith('sk-')) {
+      return res.json({ 
+        success: false, 
+        error: 'Invalid API key format (should start with sk-)',
+        configured: true 
+      });
+    }
+    
+    // Test API connection
     const response = await fetch('https://api.openai.com/v1/models', {
       headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        'Authorization': `Bearer ${apiKey}`
       }
     });
     
     if (response.ok) {
-      res.json({ success: true });
+      const models = await response.json();
+      const hasWhisper = models.data.some(m => m.id.includes('whisper'));
+      
+      res.json({ 
+        success: true,
+        configured: true,
+        hasWhisper,
+        message: 'OpenAI API connection successful'
+      });
     } else {
-      res.json({ success: false, error: 'OpenAI API key is invalid' });
+      const errorData = await response.text();
+      res.json({ 
+        success: false, 
+        error: `OpenAI API error: ${response.status} - ${errorData}`,
+        configured: true
+      });
     }
   } catch (error) {
-    res.json({ success: false, error: 'Failed to connect to OpenAI' });
+    res.json({ 
+      success: false, 
+      error: `Connection error: ${error.message}`,
+      configured: true
+    });
   }
 });
 
