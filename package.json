@@ -8,10 +8,7 @@
     "dev": "nodemon server.js",
     "db:setup": "node database-setup.js",
     "db:verify": "node verify-database.js",
-    "db:render": "node render-setup.js",
-    "db:reset": "node database-setup.js --reset",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "echo \"Linting not configured\" && exit 0"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -32,7 +29,15 @@
   "engines": {
     "node": ">=16.0.0"
   },
-  "keywords": ["whatsapp", "survey", "analytics", "bot", "postgresql", "voice", "transcription"],
+  "keywords": [
+    "whatsapp",
+    "survey",
+    "analytics",
+    "bot",
+    "postgresql",
+    "voice",
+    "transcription"
+  ],
   "author": "Your Name",
   "license": "MIT"
 }
