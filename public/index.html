@@ -35,9 +35,28 @@
             align-items: center;
             justify-content: center;
         }
+        .debug-panel {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: #333;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            max-width: 300px;
+        }
     </style>
 </head>
 <body class="bg-gray-100">
+    <!-- Debug Panel (remove in production) -->
+    <div class="debug-panel" id="debug-panel">
+        <div>Socket Status: <span id="socket-status">Disconnected</span></div>
+        <div>API Base: <span id="api-base"></span></div>
+        <div>Errors: <span id="error-count">0</span></div>
+    </div>
+
     <div class="min-h-screen">
         <!-- Header -->
         <header class="bg-white shadow-sm border-b border-gray-200">
@@ -275,46 +294,130 @@
         let socket;
         let questions = [];
         let surveys = [];
+        let errorCount = 0;
+
+        // Debug logging
+        function debugLog(message, data = null) {
+            console.log(`[DEBUG] ${message}`, data);
+            const debugPanel = document.getElementById('debug-panel');
+            if (debugPanel) {
+                const timestamp = new Date().toLocaleTimeString();
+                console.log(`${timestamp}: ${message}`);
+            }
+        }
+
+        // Get base URL for API calls
+        function getBaseUrl() {
+            // In production, use relative URLs
+            // In development, you might need to specify the full URL
+            return window.location.origin;
+        }
 
         // Initialize application
         document.addEventListener('DOMContentLoaded', function() {
+            debugLog('DOM loaded, initializing application');
+            
+            // Show base URL in debug panel
+            document.getElementById('api-base').textContent = getBaseUrl();
+            
             initializeSocket();
             loadSurveys();
             setupEventListeners();
+            
+            // Test API connection
+            testAPIConnection();
         });
+
+        // Test API connection
+        async function testAPIConnection() {
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/stats`);
+                if (response.ok) {
+                    debugLog('API connection successful');
+                } else {
+                    debugLog('API connection failed', response.status);
+                    showError('Failed to connect to API');
+                }
+            } catch (error) {
+                debugLog('API connection error', error);
+                showError('Cannot connect to server. Please check if the server is running.');
+            }
+        }
 
         // Socket.IO connection
         function initializeSocket() {
-            socket = io();
+            debugLog('Initializing Socket.IO connection');
             
-            socket.on('connect', function() {
-                updateConnectionStatus('Connected', true);
-            });
+            try {
+                socket = io(getBaseUrl(), {
+                    transports: ['websocket', 'polling'],
+                    reconnection: true,
+                    reconnectionAttempts: 5,
+                    reconnectionDelay: 1000
+                });
+                
+                socket.on('connect', function() {
+                    debugLog('Socket connected');
+                    document.getElementById('socket-status').textContent = 'Connected';
+                    updateConnectionStatus('Connected', true);
+                });
 
-            socket.on('disconnect', function() {
-                updateConnectionStatus('Disconnected', false);
-            });
+                socket.on('disconnect', function() {
+                    debugLog('Socket disconnected');
+                    document.getElementById('socket-status').textContent = 'Disconnected';
+                    updateConnectionStatus('Disconnected', false);
+                });
 
-            socket.on('whatsapp-ready', function(isReady) {
-                updateWhatsAppStatus(isReady);
-            });
+                socket.on('connect_error', function(error) {
+                    debugLog('Socket connection error', error);
+                    document.getElementById('socket-status').textContent = 'Error';
+                    showError('WebSocket connection failed');
+                });
 
-            socket.on('qr-code', function(data) {
-                displayQRCode(data.qrCode);
-            });
+                socket.on('whatsapp-ready', function(isReady) {
+                    debugLog('WhatsApp status received', isReady);
+                    updateWhatsAppStatus(isReady);
+                });
 
-            socket.on('openai-status', function(data) {
-                updateOpenAIStatus(data);
-            });
+                socket.on('qr-code', function(data) {
+                    debugLog('QR code received');
+                    displayQRCode(data.qrCode);
+                });
 
-            socket.on('survey-stats', function(data) {
-                updateStats(data);
-            });
+                socket.on('openai-status', function(data) {
+                    debugLog('OpenAI status received', data);
+                    updateOpenAIStatus(data);
+                });
 
-            socket.on('new-response', function(data) {
-                addRecentActivity(`New response from ${data.participant}`, 'success');
-                refreshData();
-            });
+                socket.on('survey-stats', function(data) {
+                    debugLog('Survey stats received', data);
+                    updateStats(data);
+                });
+
+                socket.on('new-response', function(data) {
+                    debugLog('New response received', data);
+                    addRecentActivity(`New response from ${data.participant}`, 'success');
+                    refreshData();
+                });
+            } catch (error) {
+                debugLog('Failed to initialize Socket.IO', error);
+                showError('Failed to initialize real-time connection');
+            }
+        }
+
+        // Show error message
+        function showError(message) {
+            errorCount++;
+            document.getElementById('error-count').textContent = errorCount;
+            
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'fixed top-4 right-4 bg-red-500 text-white px-4 py-2 rounded shadow-lg z-50';
+            errorDiv.textContent = message;
+            document.body.appendChild(errorDiv);
+            
+            setTimeout(() => {
+                errorDiv.remove();
+            }, 5000);
         }
 
         // Status updates
@@ -381,6 +484,9 @@
                         <span class="font-semibold">Voice Features Active</span>
                     </div>
                     <p class="text-sm text-gray-600 mt-2">AI voice transcription enabled</p>
+                    <button onclick="testOpenAI()" class="mt-2 px-4 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
+                        Test Connection
+                    </button>
                 `;
             } else {
                 panel.innerHTML = `
@@ -396,26 +502,32 @@
         }
 
         function updateStats(data) {
-            document.getElementById('total-surveys').textContent = data.totalSurveys || 0;
-            document.getElementById('total-participants').textContent = data.totalParticipants || 0;
-            document.getElementById('total-responses').textContent = data.totalResponses || 0;
-            document.getElementById('active-survey').textContent = data.activeSurvey || 'None';
+            document.getElementById('total-surveys').textContent = data.totalSurveys || data.total_surveys || 0;
+            document.getElementById('total-participants').textContent = data.totalParticipants || data.total_participants || 0;
+            document.getElementById('total-responses').textContent = data.totalResponses || data.total_responses || 0;
+            document.getElementById('active-survey').textContent = data.activeSurvey || data.active_survey || 'None';
             
             const statsContainer = document.getElementById('quick-stats');
             statsContainer.classList.remove('hidden');
         }
 
         // Survey management
-        function loadSurveys() {
-            fetch('/api/surveys')
-                .then(response => response.json())
-                .then(data => {
-                    surveys = data;
-                    renderSurveys();
-                })
-                .catch(error => {
-                    console.error('Error loading surveys:', error);
-                });
+        async function loadSurveys() {
+            debugLog('Loading surveys');
+            
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/surveys`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                debugLog('Surveys loaded', data);
+                surveys = data;
+                renderSurveys();
+            } catch (error) {
+                debugLog('Error loading surveys', error);
+                showError('Failed to load surveys');
+            }
         }
 
         function renderSurveys() {
@@ -462,18 +574,21 @@
 
         // Survey creation
         function showCreateSurvey() {
+            debugLog('Showing create survey modal');
             document.getElementById('create-survey-modal').classList.add('show');
             questions = [];
             renderQuestions();
         }
 
         function hideCreateSurvey() {
+            debugLog('Hiding create survey modal');
             document.getElementById('create-survey-modal').classList.remove('show');
             document.getElementById('survey-form').reset();
             questions = [];
         }
 
         function addQuestion(type) {
+            debugLog('Adding question', type);
             const question = {
                 id: Date.now(),
                 type: type,
@@ -609,30 +724,47 @@
         }
 
         // Survey actions
-        function toggleSurvey(surveyId, activate) {
-            fetch(`/api/surveys/${surveyId}/${activate ? 'activate' : 'deactivate'}`, {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    loadSurveys();
-                    addRecentActivity(`Survey ${activate ? 'activated' : 'deactivated'}`, 'success');
+        async function toggleSurvey(surveyId, activate) {
+            debugLog(`Toggling survey ${surveyId}`, activate);
+            
+            try {
+                const endpoint = activate ? 'activate' : 'deactivate';
+                const response = await fetch(`${getBaseUrl()}/api/surveys/${surveyId}/${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-            })
-            .catch(error => {
-                console.error('Error toggling survey:', error);
-            });
+                
+                const data = await response.json();
+                if (data.success) {
+                    await loadSurveys();
+                    addRecentActivity(`Survey ${activate ? 'activated' : 'deactivated'}`, 'success');
+                } else {
+                    showError(`Failed to ${activate ? 'activate' : 'deactivate'} survey`);
+                }
+            } catch (error) {
+                debugLog('Error toggling survey', error);
+                showError(`Failed to ${activate ? 'activate' : 'deactivate'} survey`);
+            }
         }
 
         function exportSurvey(surveyId) {
-            window.open(`/api/surveys/${surveyId}/export`, '_blank');
+            debugLog('Exporting survey', surveyId);
+            window.open(`${getBaseUrl()}/api/surveys/${surveyId}/export`, '_blank');
         }
 
         // Form submission
         function setupEventListeners() {
-            document.getElementById('survey-form').addEventListener('submit', function(e) {
+            debugLog('Setting up event listeners');
+            
+            document.getElementById('survey-form').addEventListener('submit', async function(e) {
                 e.preventDefault();
+                debugLog('Survey form submitted');
                 
                 const formData = new FormData(this);
                 const surveyData = {
@@ -647,34 +779,38 @@
                     return;
                 }
 
-                fetch('/api/surveys', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(surveyData)
-                })
-                .then(response => response.json())
-                .then(data => {
+                try {
+                    const response = await fetch(`${getBaseUrl()}/api/surveys`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(surveyData)
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const data = await response.json();
                     if (data.success) {
                         hideCreateSurvey();
-                        loadSurveys();
+                        await loadSurveys();
                         addRecentActivity(`Survey "${surveyData.title}" created`, 'success');
                     } else {
-                        alert('Error creating survey: ' + data.error);
+                        showError('Error creating survey: ' + (data.error || 'Unknown error'));
                     }
-                })
-                .catch(error => {
-                    console.error('Error creating survey:', error);
-                    alert('Error creating survey');
-                });
+                } catch (error) {
+                    debugLog('Error creating survey', error);
+                    showError('Failed to create survey. Please check your connection.');
+                }
             });
         }
 
         // Utility functions
         function refreshData() {
+            debugLog('Refreshing data');
             loadSurveys();
-            // You can add more refresh logic here
         }
 
         function addRecentActivity(message, type) {
@@ -699,22 +835,44 @@
             }
         }
 
-        function testOpenAI() {
-            fetch('/api/openai/test', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
+        async function testOpenAI() {
+            debugLog('Testing OpenAI connection');
+            
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/openai/test`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
                 if (data.success) {
                     addRecentActivity('OpenAI connection test successful', 'success');
                 } else {
-                    addRecentActivity('OpenAI connection test failed', 'error');
+                    addRecentActivity('OpenAI connection test failed: ' + (data.error || 'Unknown error'), 'error');
                 }
-            })
-            .catch(error => {
+            } catch (error) {
+                debugLog('OpenAI test error', error);
                 addRecentActivity('OpenAI connection test failed', 'error');
-            });
+            }
         }
+
+        // Expose functions globally for onclick handlers
+        window.showCreateSurvey = showCreateSurvey;
+        window.hideCreateSurvey = hideCreateSurvey;
+        window.addQuestion = addQuestion;
+        window.removeQuestion = removeQuestion;
+        window.updateQuestion = updateQuestion;
+        window.addOption = addOption;
+        window.removeOption = removeOption;
+        window.updateOption = updateOption;
+        window.updateScale = updateScale;
+        window.toggleSurvey = toggleSurvey;
+        window.exportSurvey = exportSurvey;
+        window.refreshData = refreshData;
+        window.testOpenAI = testOpenAI;
     </script>
 </body>
 </html>
