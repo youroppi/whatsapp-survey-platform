@@ -6,6 +6,8 @@
     <title>WhatsApp Survey Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
 </head>
 <body class="bg-gray-50">
     <div class="min-h-screen p-6">
@@ -144,6 +146,17 @@
                     </div>
 
                     <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Survey Description</label>
+                        <textarea 
+                            id="survey-description" 
+                            rows="3"
+                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            placeholder="Enter a welcome message or description for participants (optional)"
+                        ></textarea>
+                        <p class="text-xs text-gray-500 mt-1">This message will be shown to participants when they start the survey</p>
+                    </div>
+
+                    <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Estimated Time</label>
                         <input 
                             type="text" 
@@ -201,6 +214,25 @@
         let surveys = [];
         let questions = [];
         let currentSurveyResults = null;
+        const socket = io();
+
+        // Socket.io event listeners
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+
+        socket.on('whatsapp-ready', (isReady) => {
+            updateWhatsAppStatus(isReady);
+        });
+
+        socket.on('qr-code', (data) => {
+            updateWhatsAppQR(data.qrCode);
+        });
+
+        socket.on('survey-stats', (stats) => {
+            surveys = stats;
+            renderSurveys();
+        });
 
         // Navigation functions
         function showMainDashboard() {
@@ -253,12 +285,13 @@
                     <div class="text-green-700 text-sm">Unique Participants</div>
                 </div>
                 <div class="bg-purple-50 rounded-lg p-4 text-center">
-                    <div class="text-2xl font-bold text-purple-900">${Math.round((analytics.totalResponses / Math.max(analytics.uniqueParticipants, 1)) * 100)}%</div>
+                    <div class="text-2xl font-bold text-purple-900">${analytics.completionRate}%</div>
                     <div class="text-purple-700 text-sm">Completion Rate</div>
+                    <div class="text-purple-600 text-xs mt-1">${analytics.completedSurveys}/${analytics.uniqueParticipants} completed</div>
                 </div>
                 <div class="bg-orange-50 rounded-lg p-4 text-center">
-                    <div class="text-2xl font-bold text-orange-900">${Object.keys(analytics.responsesByQuestion).length}</div>
-                    <div class="text-orange-700 text-sm">Questions</div>
+                    <div class="text-2xl font-bold text-orange-900">${analytics.averageCompletionTime || '—'}</div>
+                    <div class="text-orange-700 text-sm">Avg. Time (seconds)</div>
                 </div>
             `;
 
@@ -288,9 +321,13 @@
                                 <h4 class="font-medium text-gray-700 mb-3">Comments (${data.followUps.length})</h4>
                                 <div class="space-y-2 max-h-48 overflow-y-auto">
                                     ${data.followUps.slice(0, 5).map(comment => `
-                                        <div class="bg-gray-50 p-3 rounded text-sm">"${comment}"</div>
+                                        <div class="bg-gray-50 p-3 rounded">
+                                            <div class="text-xs text-gray-500 mb-1">${comment.participantId}</div>
+                                            <div class="text-sm">"${comment.text}"</div>
+                                        </div>
                                     `).join('')}
                                     ${data.followUps.length === 0 ? '<p class="text-gray-500 text-sm">No comments yet.</p>' : ''}
+                                    ${data.followUps.length > 5 ? `<p class="text-gray-500 text-xs mt-2">+${data.followUps.length - 5} more comments</p>` : ''}
                                 </div>
                             </div>
                         </div>
@@ -308,9 +345,13 @@
                                 <h4 class="font-medium text-gray-700 mb-3">Comments (${data.followUps.length})</h4>
                                 <div class="space-y-2 max-h-48 overflow-y-auto">
                                     ${data.followUps.slice(0, 5).map(comment => `
-                                        <div class="bg-gray-50 p-3 rounded text-sm">"${comment}"</div>
+                                        <div class="bg-gray-50 p-3 rounded">
+                                            <div class="text-xs text-gray-500 mb-1">${comment.participantId}</div>
+                                            <div class="text-sm">"${comment.text}"</div>
+                                        </div>
                                     `).join('')}
                                     ${data.followUps.length === 0 ? '<p class="text-gray-500 text-sm">No comments yet.</p>' : ''}
+                                    ${data.followUps.length > 5 ? `<p class="text-gray-500 text-xs mt-2">+${data.followUps.length - 5} more comments</p>` : ''}
                                 </div>
                             </div>
                         </div>
@@ -419,14 +460,20 @@
                 return 'No data available';
             }
 
-            const headers = ['Question', 'Answer', 'Follow-up Comment', 'Phone Number', 'Timestamp', 'Voice Transcribed'];
+            // Updated headers to match the enhanced export format
+            const headers = ['ParticipantID', 'Survey', 'Question', 'Answer', 'FollowUpComment', 'PhoneNumber', 'ResponseTimestamp', 'CompletionTimestamp', 'CompletionDuration', 'VoiceTranscribed', 'VoiceLanguage'];
             const rows = responses.map(response => [
-                `"${response.questionText}"`,
-                `"${response.answer}"`,
-                `"${response.followUp || ''}"`,
-                `"${response.phoneNumber.replace('@c.us', '')}"`,
-                `"${new Date(response.timestamp).toLocaleString()}"`,
-                `"${response.voiceMetadata ? 'Yes' : 'No'}"`
+                `"${response.ParticipantID}"`,
+                `"${response.Survey}"`,
+                `"${response.Question}"`,
+                `"${response.Answer}"`,
+                `"${response.FollowUpComment || ''}"`,
+                `"${response.PhoneNumber}"`,
+                `"${response.ResponseTimestamp}"`,
+                `"${response.CompletionTimestamp || 'Not Completed'}"`,
+                `"${response.CompletionDuration || 'N/A'}"`,
+                `"${response.VoiceTranscribed}"`,
+                `"${response.VoiceLanguage || ''}"`
             ]);
 
             return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
@@ -444,6 +491,35 @@
             window.URL.revokeObjectURL(url);
         }
 
+        // WhatsApp status functions
+        function updateWhatsAppStatus(isReady) {
+            const statusDiv = document.getElementById('whatsapp-status');
+            if (isReady) {
+                statusDiv.innerHTML = `
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <div class="text-green-700 font-semibold mb-2">✅ WhatsApp Connected!</div>
+                        <div class="text-green-600 text-sm">Bot is ready to receive messages</div>
+                    </div>
+                `;
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <div class="text-yellow-700">🔄 Waiting for WhatsApp connection...</div>
+                    </div>
+                `;
+            }
+        }
+
+        function updateWhatsAppQR(qrCode) {
+            const statusDiv = document.getElementById('whatsapp-status');
+            statusDiv.innerHTML = `
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div class="text-blue-700 font-semibold mb-4">📱 Scan QR Code with WhatsApp:</div>
+                    <img src="${qrCode}" alt="WhatsApp QR Code" class="max-w-xs mx-auto rounded-lg border">
+                </div>
+            `;
+        }
+
         // Load initial status
         async function loadStatus() {
             const whatsappStatus = document.getElementById('whatsapp-status');
@@ -454,25 +530,11 @@
                 const whatsappData = await whatsappResponse.json();
                 
                 if (whatsappData.isReady) {
-                    whatsappStatus.innerHTML = `
-                        <div class="bg-green-50 border border-green-200 rounded-lg p-4">
-                            <div class="text-green-700 font-semibold mb-2">✅ WhatsApp Connected!</div>
-                            <div class="text-green-600 text-sm">Bot is ready to receive messages</div>
-                        </div>
-                    `;
+                    updateWhatsAppStatus(true);
                 } else if (whatsappData.qrCode) {
-                    whatsappStatus.innerHTML = `
-                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                            <div class="text-blue-700 font-semibold mb-4">📱 Scan QR Code with WhatsApp:</div>
-                            <img src="${whatsappData.qrCode}" alt="WhatsApp QR Code" class="max-w-xs mx-auto rounded-lg border">
-                        </div>
-                    `;
+                    updateWhatsAppQR(whatsappData.qrCode);
                 } else {
-                    whatsappStatus.innerHTML = `
-                        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                            <div class="text-yellow-700">🔄 Initializing WhatsApp...</div>
-                        </div>
-                    `;
+                    updateWhatsAppStatus(false);
                 }
             } catch (e) {
                 whatsappStatus.innerHTML = `
@@ -515,6 +577,13 @@
             document.getElementById('create-survey-modal').classList.remove('hidden');
             questions = [];
             renderQuestions();
+            
+            // Set some example text
+            document.getElementById('survey-description').placeholder = `Welcome! We're conducting this survey to gather your valuable feedback about our upcoming course.
+
+Your responses will help us improve the content and delivery to better meet your needs.
+
+All responses are confidential and will be used solely for course improvement purposes.`;
         }
 
         function hideCreateSurvey() {
@@ -740,6 +809,7 @@
             e.preventDefault();
             
             const title = document.getElementById('survey-title').value;
+            const description = document.getElementById('survey-description').value;
             const estimatedTime = document.getElementById('survey-time').value;
             
             if (questions.length === 0) {
@@ -765,6 +835,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         title: title,
+                        description: description,
                         estimatedTime: estimatedTime,
                         questions: questions.map((q, index) => ({
                             id: index + 1,
@@ -810,24 +881,25 @@
                     <div class="flex items-center justify-between mb-2">
                         <h3 class="text-xl font-semibold text-gray-800">${survey.title}</h3>
                         <div class="flex items-center space-x-2">
-                            ${survey.isActive ? '<span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">Active</span>' : ''}
-                            <span class="text-sm text-gray-500">${survey.questions.length} questions</span>
+                            ${survey.is_active ? '<span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">Active</span>' : ''}
+                            <span class="text-sm text-gray-500">${survey.questions?.length || 0} questions</span>
                         </div>
                     </div>
                     
                     <div class="flex items-center space-x-4 text-sm text-gray-600 mb-3">
-                        <span>👥 ${survey.participants || 0} participants</span>
-                        <span>📊 ${survey.responses || 0} responses</span>
-                        <span>⏱️ ~${survey.estimatedTime}</span>
+                        <span>👥 ${survey.total_participants || survey.participants || 0} participants</span>
+                        <span>✅ ${survey.completed_participants || survey.completions || 0} completed</span>
+                        <span>📊 ${survey.total_responses || survey.responses || 0} responses</span>
+                        <span>⏱️ ~${survey.estimated_time || '3-5 minutes'}</span>
                     </div>
 
                     <div class="flex space-x-2">
                         <button 
                             onclick="activateSurvey('${survey.id}')"
-                            ${survey.isActive ? 'disabled' : ''}
-                            class="px-3 py-1 ${survey.isActive ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'} text-white rounded text-sm"
+                            ${survey.is_active ? 'disabled' : ''}
+                            class="px-3 py-1 ${survey.is_active ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'} text-white rounded text-sm"
                         >
-                            ${survey.isActive ? 'Active' : 'Activate'}
+                            ${survey.is_active ? 'Active' : 'Activate'}
                         </button>
                         <button 
                             onclick="showResultsView(surveys.find(s => s.id === '${survey.id}'))"
@@ -854,9 +926,9 @@
                 });
 
                 if (response.ok) {
-                    surveys.forEach(s => s.isActive = false);
+                    surveys.forEach(s => s.is_active = false);
                     const survey = surveys.find(s => s.id === surveyId);
-                    if (survey) survey.isActive = true;
+                    if (survey) survey.is_active = true;
                     
                     renderSurveys();
                     alert('Survey activated! Participants can now respond via WhatsApp.');
