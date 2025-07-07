@@ -638,6 +638,8 @@
             });
         }
 
+        let chartInstances = {};
+
         // Show analytics for a survey
         async function handleShowAnalytics(event) {
             const surveyId = event.target.dataset.surveyId;
@@ -645,8 +647,20 @@
             
             if (!survey) return;
             
+            // Clear any existing charts before showing modal
+            destroyAllCharts();
+            
             document.getElementById('analytics-title').textContent = `Analytics: ${survey.title}`;
             document.getElementById('analytics-modal').classList.add('show');
+            
+            // Show loading state
+            const container = document.getElementById('analytics-content');
+            container.innerHTML = `
+                <div class="text-center py-8">
+                    <div class="loader mx-auto mb-4"></div>
+                    <p class="text-gray-600">Loading analytics...</p>
+                </div>
+            `;
             
             // Update summary stats
             document.getElementById('analytics-total-participants').textContent = survey.participant_count || 0;
@@ -655,44 +669,91 @@
                 : 0;
             document.getElementById('analytics-completion-rate').textContent = `${completionRate}%`;
             
+            // Calculate average time (placeholder for now)
+            document.getElementById('analytics-avg-time').textContent = '0 min';
+            
             // Load responses and create charts
             try {
                 const response = await fetch(`${getBaseUrl()}/api/surveys/${surveyId}/responses`);
                 if (!response.ok) throw new Error('Failed to load responses');
                 
                 const responses = await response.json();
+                
+                // Check if there are any responses
+                if (!responses || responses.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center text-gray-500 py-12">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            </svg>
+                            <p class="text-lg font-medium">No responses yet</p>
+                            <p class="text-sm mt-2">Responses will appear here once participants complete the survey</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
                 displayAnalytics(responses, survey);
             } catch (error) {
-                showError('Failed to load analytics');
+                console.error('Analytics error:', error);
+                container.innerHTML = `
+                    <div class="text-center text-red-500 py-12">
+                        <svg class="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <p class="text-lg font-medium">Error loading analytics</p>
+                        <p class="text-sm mt-2 text-gray-600">Please try again later</p>
+                    </div>
+                `;
             }
         }
-
+        
         // Display analytics charts
         function displayAnalytics(responses, survey) {
             const container = document.getElementById('analytics-content');
             container.innerHTML = '';
             
+            // Destroy any existing charts
+            destroyAllCharts();
+            
             // Group responses by question
             const questionGroups = {};
             responses.forEach(response => {
-                if (!questionGroups[response.question_text]) {
-                    questionGroups[response.question_text] = {
+                const key = response.question_text;
+                if (!questionGroups[key]) {
+                    questionGroups[key] = {
                         type: response.question_type,
-                        answers: []
+                        questionNumber: response.question_number,
+                        answers: [],
+                        comments: []
                     };
                 }
-                questionGroups[response.question_text].answers.push(response.answer);
+                questionGroups[key].answers.push(response.answer);
+                if (response.follow_up_comment) {
+                    questionGroups[key].comments.push(response.follow_up_comment);
+                }
             });
             
+            // Sort by question number
+            const sortedQuestions = Object.entries(questionGroups).sort((a, b) => 
+                a[1].questionNumber - b[1].questionNumber
+            );
+            
             // Create visualization for each question
-            Object.entries(questionGroups).forEach(([question, data], index) => {
+            sortedQuestions.forEach(([question, data], index) => {
                 const questionDiv = document.createElement('div');
-                questionDiv.className = 'border rounded-lg p-4';
+                questionDiv.className = 'border rounded-lg p-4 bg-white';
                 
                 const title = document.createElement('h4');
                 title.className = 'font-semibold text-gray-900 mb-3';
-                title.textContent = question;
+                title.textContent = `Q${data.questionNumber}: ${question}`;
                 questionDiv.appendChild(title);
+                
+                // Add response count
+                const responseCount = document.createElement('p');
+                responseCount.className = 'text-sm text-gray-600 mb-3';
+                responseCount.textContent = `${data.answers.length} responses`;
+                questionDiv.appendChild(responseCount);
                 
                 if (data.type === 'multiple' || data.type === 'curated') {
                     // Count responses
@@ -701,99 +762,175 @@
                         counts[answer] = (counts[answer] || 0) + 1;
                     });
                     
-                    // Create bar chart
+                    // Create canvas
+                    const canvasContainer = document.createElement('div');
+                    canvasContainer.style.height = '200px';
+                    canvasContainer.style.position = 'relative';
+                    
                     const canvas = document.createElement('canvas');
                     canvas.id = `chart-${index}`;
-                    canvas.height = 100;
-                    questionDiv.appendChild(canvas);
+                    canvasContainer.appendChild(canvas);
+                    questionDiv.appendChild(canvasContainer);
                     
-                    setTimeout(() => {
-                        const ctx = canvas.getContext('2d');
-                        new Chart(ctx, {
-                            type: 'bar',
-                            data: {
-                                labels: Object.keys(counts),
-                                datasets: [{
-                                    label: 'Responses',
-                                    data: Object.values(counts),
-                                    backgroundColor: 'rgba(59, 130, 246, 0.5)',
-                                    borderColor: 'rgba(59, 130, 246, 1)',
-                                    borderWidth: 1
-                                }]
-                            },
-                            options: {
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                scales: {
-                                    y: {
-                                        beginAtZero: true,
-                                        ticks: {
-                                            stepSize: 1
+                    // Create chart after DOM update
+                    requestAnimationFrame(() => {
+                        try {
+                            const ctx = canvas.getContext('2d');
+                            const chart = new Chart(ctx, {
+                                type: 'bar',
+                                data: {
+                                    labels: Object.keys(counts),
+                                    datasets: [{
+                                        label: 'Responses',
+                                        data: Object.values(counts),
+                                        backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                                        borderColor: 'rgba(59, 130, 246, 1)',
+                                        borderWidth: 1
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    plugins: {
+                                        legend: {
+                                            display: false
+                                        }
+                                    },
+                                    scales: {
+                                        y: {
+                                            beginAtZero: true,
+                                            ticks: {
+                                                stepSize: 1,
+                                                precision: 0
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        });
-                    }, 100);
+                            });
+                            // Store chart instance for cleanup
+                            chartInstances[`chart-${index}`] = chart;
+                        } catch (error) {
+                            console.error('Error creating bar chart:', error);
+                        }
+                    });
+                    
                 } else if (data.type === 'likert') {
                     // Create distribution chart for ratings
                     const ratings = data.answers.map(a => parseInt(a)).filter(n => !isNaN(n));
-                    const distribution = {};
-                    ratings.forEach(rating => {
-                        distribution[rating] = (distribution[rating] || 0) + 1;
-                    });
                     
-                    const canvas = document.createElement('canvas');
-                    canvas.id = `chart-${index}`;
-                    canvas.height = 100;
-                    questionDiv.appendChild(canvas);
-                    
-                    setTimeout(() => {
-                        const ctx = canvas.getContext('2d');
-                        new Chart(ctx, {
-                            type: 'line',
-                            data: {
-                                labels: Object.keys(distribution).sort((a, b) => a - b),
-                                datasets: [{
-                                    label: 'Rating Distribution',
-                                    data: Object.keys(distribution).sort((a, b) => a - b).map(k => distribution[k]),
-                                    backgroundColor: 'rgba(147, 51, 234, 0.2)',
-                                    borderColor: 'rgba(147, 51, 234, 1)',
-                                    borderWidth: 2,
-                                    tension: 0.4
-                                }]
-                            },
-                            options: {
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                scales: {
-                                    y: {
-                                        beginAtZero: true,
-                                        ticks: {
-                                            stepSize: 1
+                    if (ratings.length > 0) {
+                        const distribution = {};
+                        const min = Math.min(...ratings);
+                        const max = Math.max(...ratings);
+                        
+                        // Initialize all possible values
+                        for (let i = min; i <= max; i++) {
+                            distribution[i] = 0;
+                        }
+                        
+                        // Count occurrences
+                        ratings.forEach(rating => {
+                            distribution[rating]++;
+                        });
+                        
+                        // Calculate average
+                        const average = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+                        const avgDiv = document.createElement('p');
+                        avgDiv.className = 'text-sm text-gray-600 mb-3';
+                        avgDiv.textContent = `Average rating: ${average.toFixed(2)}`;
+                        questionDiv.appendChild(avgDiv);
+                        
+                        // Create canvas
+                        const canvasContainer = document.createElement('div');
+                        canvasContainer.style.height = '200px';
+                        canvasContainer.style.position = 'relative';
+                        
+                        const canvas = document.createElement('canvas');
+                        canvas.id = `chart-${index}`;
+                        canvasContainer.appendChild(canvas);
+                        questionDiv.appendChild(canvasContainer);
+                        
+                        // Create chart after DOM update
+                        requestAnimationFrame(() => {
+                            try {
+                                const ctx = canvas.getContext('2d');
+                                const labels = Object.keys(distribution).map(k => parseInt(k));
+                                const chart = new Chart(ctx, {
+                                    type: 'line',
+                                    data: {
+                                        labels: labels,
+                                        datasets: [{
+                                            label: 'Rating Distribution',
+                                            data: labels.map(k => distribution[k]),
+                                            backgroundColor: 'rgba(147, 51, 234, 0.2)',
+                                            borderColor: 'rgba(147, 51, 234, 1)',
+                                            borderWidth: 2,
+                                            tension: 0.4,
+                                            fill: true
+                                        }]
+                                    },
+                                    options: {
+                                        responsive: true,
+                                        maintainAspectRatio: false,
+                                        plugins: {
+                                            legend: {
+                                                display: false
+                                            }
+                                        },
+                                        scales: {
+                                            y: {
+                                                beginAtZero: true,
+                                                ticks: {
+                                                    stepSize: 1,
+                                                    precision: 0
+                                                }
+                                            },
+                                            x: {
+                                                ticks: {
+                                                    stepSize: 1
+                                                }
+                                            }
                                         }
                                     }
-                                }
+                                });
+                                // Store chart instance for cleanup
+                                chartInstances[`chart-${index}`] = chart;
+                            } catch (error) {
+                                console.error('Error creating line chart:', error);
                             }
                         });
-                    }, 100);
+                    }
+                    
                 } else {
                     // Text responses - show sample
                     const sampleDiv = document.createElement('div');
-                    sampleDiv.className = 'space-y-2 max-h-40 overflow-y-auto';
-                    const samples = data.answers.slice(0, 5);
+                    sampleDiv.className = 'space-y-2 max-h-60 overflow-y-auto';
+                    const samples = data.answers.slice(0, 10);
                     
-                    samples.forEach(answer => {
+                    samples.forEach((answer, i) => {
                         const answerDiv = document.createElement('div');
-                        answerDiv.className = 'bg-gray-50 p-2 rounded text-sm text-gray-700';
-                        answerDiv.textContent = answer;
+                        answerDiv.className = 'bg-gray-50 p-3 rounded text-sm text-gray-700';
+                        
+                        const answerText = document.createElement('p');
+                        answerText.className = 'font-medium';
+                        answerText.textContent = answer;
+                        answerDiv.appendChild(answerText);
+                        
+                        // Show follow-up comment if exists
+                        if (data.comments[i]) {
+                            const commentDiv = document.createElement('p');
+                            commentDiv.className = 'mt-1 text-xs text-gray-600 italic';
+                            commentDiv.textContent = `Follow-up: ${data.comments[i]}`;
+                            answerDiv.appendChild(commentDiv);
+                        }
+                        
                         sampleDiv.appendChild(answerDiv);
                     });
                     
-                    if (data.answers.length > 5) {
+                    if (data.answers.length > 10) {
                         const moreDiv = document.createElement('div');
-                        moreDiv.className = 'text-sm text-gray-500 italic';
-                        moreDiv.textContent = `... and ${data.answers.length - 5} more responses`;
+                        moreDiv.className = 'text-sm text-gray-500 italic pt-2';
+                        moreDiv.textContent = `... and ${data.answers.length - 10} more responses`;
                         sampleDiv.appendChild(moreDiv);
                     }
                     
@@ -803,6 +940,26 @@
                 container.appendChild(questionDiv);
             });
         }
+        
+        // Destroy all chart instances
+        function destroyAllCharts() {
+            Object.keys(chartInstances).forEach(key => {
+                if (chartInstances[key]) {
+                    try {
+                        chartInstances[key].destroy();
+                    } catch (error) {
+                        console.error('Error destroying chart:', error);
+                    }
+                }
+            });
+            chartInstances = {};
+        }
+        
+        // Update the event listener for closing analytics modal
+        document.getElementById('close-analytics-btn').addEventListener('click', () => {
+            destroyAllCharts(); // Clean up charts when closing
+            document.getElementById('analytics-modal').classList.remove('show');
+        });
 
         // Handle toggle survey
         async function handleToggleSurvey(event) {
