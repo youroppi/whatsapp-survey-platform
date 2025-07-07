@@ -46,14 +46,15 @@
             font-family: monospace;
             font-size: 12px;
             max-width: 300px;
+            z-index: 9999;
         }
     </style>
 </head>
 <body class="bg-gray-100">
-    <!-- Debug Panel (remove in production) -->
+    <!-- Debug Panel -->
     <div class="debug-panel" id="debug-panel">
-        <div>Socket Status: <span id="socket-status">Disconnected</span></div>
-        <div>API Base: <span id="api-base"></span></div>
+        <div>Socket: <span id="socket-status">Disconnected</span></div>
+        <div>API: <span id="api-base"></span></div>
         <div>Errors: <span id="error-count">0</span></div>
     </div>
 
@@ -74,7 +75,7 @@
                             <div class="w-2 h-2 bg-gray-400 rounded-full"></div>
                             <span class="text-sm text-gray-600">Connecting...</span>
                         </div>
-                        <button onclick="refreshData()" class="p-2 text-gray-400 hover:text-gray-600 transition-colors">
+                        <button id="refresh-btn" class="p-2 text-gray-400 hover:text-gray-600 transition-colors">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                             </svg>
@@ -181,7 +182,6 @@
                     <h2 class="text-xl font-bold text-gray-800 mb-4 sm:mb-0">Survey Management</h2>
                     <button 
                         id="create-survey-btn"
-                        onclick="showCreateSurvey()" 
                         class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center space-x-2 transition-colors"
                     >
                         <span class="text-lg">+</span>
@@ -215,7 +215,7 @@
             <div class="px-6 py-4 border-b border-gray-200">
                 <div class="flex items-center justify-between">
                     <h3 class="text-lg font-semibold text-gray-900">Create New Survey</h3>
-                    <button onclick="hideCreateSurvey()" class="text-gray-400 hover:text-gray-600">
+                    <button id="close-modal-btn" class="text-gray-400 hover:text-gray-600">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                         </svg>
@@ -249,19 +249,19 @@
                     <div class="mb-6">
                         <label class="block text-sm font-medium text-gray-700 mb-3">Questions</label>
                         <div class="flex flex-wrap gap-2 mb-4">
-                            <button type="button" onclick="addQuestion('curated')" 
+                            <button type="button" id="add-curated-btn" 
                                     class="px-3 py-1 bg-green-500 text-white text-sm rounded hover:bg-green-600">
                                 + Agree/Disagree
                             </button>
-                            <button type="button" onclick="addQuestion('multiple')" 
+                            <button type="button" id="add-multiple-btn" 
                                     class="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
                                 + Multiple Choice
                             </button>
-                            <button type="button" onclick="addQuestion('likert')" 
+                            <button type="button" id="add-likert-btn" 
                                     class="px-3 py-1 bg-purple-500 text-white text-sm rounded hover:bg-purple-600">
                                 + Rating Scale
                             </button>
-                            <button type="button" onclick="addQuestion('text')" 
+                            <button type="button" id="add-text-btn" 
                                     class="px-3 py-1 bg-gray-500 text-white text-sm rounded hover:bg-gray-600">
                                 + Text Response
                             </button>
@@ -275,7 +275,7 @@
                     </div>
 
                     <div class="flex justify-end space-x-4">
-                        <button type="button" onclick="hideCreateSurvey()" 
+                        <button type="button" id="cancel-survey-btn" 
                                 class="px-6 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50">
                             Cancel
                         </button>
@@ -291,152 +291,28 @@
 
     <script>
         // Global variables
-        let socket;
+        let socket = null;
         let questions = [];
         let surveys = [];
         let errorCount = 0;
 
+        // Get base URL
+        function getBaseUrl() {
+            const url = window.location.origin;
+            console.log('Base URL:', url);
+            return url;
+        }
+
         // Debug logging
         function debugLog(message, data = null) {
-            console.log(`[DEBUG] ${message}`, data);
-            const debugPanel = document.getElementById('debug-panel');
-            if (debugPanel) {
-                const timestamp = new Date().toLocaleTimeString();
-                console.log(`${timestamp}: ${message}`);
-            }
+            console.log(`[DEBUG] ${message}`, data || '');
         }
 
-        // Get base URL for API calls
-        function getBaseUrl() {
-            // In production, use relative URLs
-            // In development, you might need to specify the full URL
-            return window.location.origin;
-        }
-
-        // Initialize application
-        document.addEventListener('DOMContentLoaded', function() {
-            debugLog('DOM loaded, initializing application');
-            
-            // Show base URL in debug panel
-            document.getElementById('api-base').textContent = getBaseUrl();
-            
-            initializeSocket();
-            loadSurveys();
-            setupEventListeners();
-            
-            // Test API connection
-            testAPIConnection();
-        });
-
-        // Test API connection
-        async function testAPIConnection() {
-            try {
-                const response = await fetch(`${getBaseUrl()}/api/stats`);
-                if (response.ok) {
-                    debugLog('API connection successful');
-                } else {
-                    debugLog('API connection failed', response.status);
-                    showError('Failed to connect to API');
-                }
-            } catch (error) {
-                debugLog('API connection error', error);
-                showError('Cannot connect to server. Please check if the server is running.');
-            }
-        }
-
-        // Socket.IO connection
-        function initializeSocket() {
-            debugLog('Initializing Socket.IO connection');
-            
-            try {
-                // Fix for Render.com deployment - use polling as primary transport
-                socket = io(getBaseUrl(), {
-                    transports: ['polling', 'websocket'], // Polling first, then upgrade to websocket
-                    reconnection: true,
-                    reconnectionAttempts: 5,
-                    reconnectionDelay: 1000,
-                    timeout: 20000, // Increase timeout for Render
-                    upgrade: true, // Allow upgrading from polling to websocket
-                    // Force new connection
-                    forceNew: true
-                });
-                
-                socket.on('connect', function() {
-                    debugLog('Socket connected via ' + socket.io.engine.transport.name);
-                    document.getElementById('socket-status').textContent = 'Connected';
-                    updateConnectionStatus('Connected', true);
-                    
-                    // Clear any error messages
-                    const errorDiv = document.querySelector('.bg-red-500');
-                    if (errorDiv) errorDiv.remove();
-                });
-        
-                socket.on('disconnect', function(reason) {
-                    debugLog('Socket disconnected: ' + reason);
-                    document.getElementById('socket-status').textContent = 'Disconnected';
-                    updateConnectionStatus('Disconnected', false);
-                });
-        
-                socket.on('connect_error', function(error) {
-                    debugLog('Socket connection error', error.message);
-                    document.getElementById('socket-status').textContent = 'Error';
-                    
-                    // Don't show error message for every retry
-                    if (socket.io._reconnectionAttempts === 1) {
-                        console.warn('WebSocket failed, using polling transport');
-                    }
-                });
-        
-                // Add transport-specific handlers
-                socket.io.on('upgrade', function(transport) {
-                    debugLog('Transport upgraded to: ' + transport.name);
-                });
-        
-                socket.on('whatsapp-ready', function(isReady) {
-                    debugLog('WhatsApp status received', isReady);
-                    updateWhatsAppStatus(isReady);
-                });
-        
-                socket.on('qr-code', function(data) {
-                    debugLog('QR code received');
-                    displayQRCode(data.qrCode);
-                });
-        
-                socket.on('openai-status', function(data) {
-                    debugLog('OpenAI status received', data);
-                    updateOpenAIStatus(data);
-                });
-        
-                socket.on('survey-stats', function(data) {
-                    debugLog('Survey stats received', data);
-                    updateStats(data);
-                });
-        
-                socket.on('new-response', function(data) {
-                    debugLog('New response received', data);
-                    addRecentActivity(`New response from ${data.participant}`, 'success');
-                    refreshData();
-                });
-            } catch (error) {
-                debugLog('Failed to initialize Socket.IO', error);
-                // Continue without real-time features
-                console.warn('Real-time features disabled, using API polling instead');
-                
-                // Start polling for updates as fallback
-                setInterval(() => {
-                    loadSurveys();
-                    fetch(`${getBaseUrl()}/api/stats`)
-                        .then(r => r.json())
-                        .then(data => updateStats(data))
-                        .catch(() => {});
-                }, 5000);
-            }
-        }
-
-        // Show error message
+        // Show error
         function showError(message) {
             errorCount++;
             document.getElementById('error-count').textContent = errorCount;
+            console.error('[ERROR]', message);
             
             const errorDiv = document.createElement('div');
             errorDiv.className = 'fixed top-4 right-4 bg-red-500 text-white px-4 py-2 rounded shadow-lg z-50';
@@ -448,23 +324,72 @@
             }, 5000);
         }
 
-        // Status updates
+        // Initialize Socket.IO with fallback
+        function initializeSocket() {
+            debugLog('Initializing Socket.IO...');
+            
+            try {
+                // For Render.com, use explicit URL
+                const socketUrl = window.location.origin;
+                
+                socket = io(socketUrl, {
+                    path: '/socket.io/',
+                    transports: ['polling'], // Only use polling on Render free tier
+                    reconnection: true,
+                    reconnectionAttempts: 3,
+                    reconnectionDelay: 1000,
+                    timeout: 10000,
+                    forceNew: true
+                });
+                
+                socket.on('connect', function() {
+                    debugLog('Socket connected');
+                    document.getElementById('socket-status').textContent = 'Connected';
+                    updateConnectionStatus('Connected', true);
+                });
+
+                socket.on('disconnect', function(reason) {
+                    debugLog('Socket disconnected:', reason);
+                    document.getElementById('socket-status').textContent = 'Disconnected';
+                    updateConnectionStatus('Disconnected', false);
+                });
+
+                socket.on('connect_error', function(error) {
+                    console.warn('Socket connection failed, using API fallback');
+                    document.getElementById('socket-status').textContent = 'API Mode';
+                    // Don't show error for expected failures
+                });
+
+                // Socket event handlers
+                socket.on('whatsapp-ready', updateWhatsAppStatus);
+                socket.on('qr-code', (data) => displayQRCode(data.qrCode));
+                socket.on('openai-status', updateOpenAIStatus);
+                socket.on('survey-stats', updateStats);
+                socket.on('new-response', (data) => {
+                    addRecentActivity(`New response from ${data.participant}`, 'success');
+                    refreshData();
+                });
+                
+            } catch (error) {
+                console.warn('Socket.IO initialization failed, using API-only mode');
+                document.getElementById('socket-status').textContent = 'API Only';
+                // Start polling as fallback
+                setInterval(refreshData, 5000);
+            }
+        }
+
+        // Update connection status
         function updateConnectionStatus(status, isConnected) {
             const statusEl = document.getElementById('connection-status');
             const dot = statusEl.querySelector('.w-2');
             const text = statusEl.querySelector('span');
             
-            if (isConnected) {
-                dot.className = 'w-2 h-2 bg-green-500 rounded-full';
-                text.textContent = status;
-                text.className = 'text-sm text-green-600';
-            } else {
-                dot.className = 'w-2 h-2 bg-red-500 rounded-full';
-                text.textContent = status;
-                text.className = 'text-sm text-red-600';
-            }
+            dot.className = `w-2 h-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'} rounded-full`;
+            text.textContent = status;
+            text.className = `text-sm ${isConnected ? 'text-green-600' : 'text-red-600'}`;
         }
 
+        // Update WhatsApp status
         function updateWhatsAppStatus(isReady) {
             const panel = document.getElementById('whatsapp-status-panel');
             
@@ -489,6 +414,7 @@
             }
         }
 
+        // Display QR code
         function displayQRCode(qrCode) {
             const panel = document.getElementById('whatsapp-status-panel');
             panel.innerHTML = `
@@ -500,6 +426,7 @@
             `;
         }
 
+        // Update OpenAI status
         function updateOpenAIStatus(data) {
             const panel = document.getElementById('openai-status-panel');
             
@@ -512,10 +439,17 @@
                         <span class="font-semibold">Voice Features Active</span>
                     </div>
                     <p class="text-sm text-gray-600 mt-2">AI voice transcription enabled</p>
-                    <button onclick="testOpenAI()" class="mt-2 px-4 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
+                    <button id="test-openai-btn" class="mt-2 px-4 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
                         Test Connection
                     </button>
                 `;
+                // Add event listener after creating button
+                setTimeout(() => {
+                    const testBtn = document.getElementById('test-openai-btn');
+                    if (testBtn) {
+                        testBtn.addEventListener('click', testOpenAI);
+                    }
+                }, 100);
             } else {
                 panel.innerHTML = `
                     <div class="flex items-center justify-center space-x-2 text-yellow-600">
@@ -529,35 +463,34 @@
             }
         }
 
+        // Update stats
         function updateStats(data) {
-            document.getElementById('total-surveys').textContent = data.totalSurveys || data.total_surveys || 0;
-            document.getElementById('total-participants').textContent = data.totalParticipants || data.total_participants || 0;
-            document.getElementById('total-responses').textContent = data.totalResponses || data.total_responses || 0;
-            document.getElementById('active-survey').textContent = data.activeSurvey || data.active_survey || 'None';
-            
-            const statsContainer = document.getElementById('quick-stats');
-            statsContainer.classList.remove('hidden');
+            document.getElementById('total-surveys').textContent = data.total_surveys || 0;
+            document.getElementById('total-participants').textContent = data.total_participants || 0;
+            document.getElementById('total-responses').textContent = data.total_responses || 0;
+            document.getElementById('active-survey').textContent = data.active_survey || 'None';
+            document.getElementById('quick-stats').classList.remove('hidden');
         }
 
-        // Survey management
+        // Load surveys
         async function loadSurveys() {
-            debugLog('Loading surveys');
+            debugLog('Loading surveys...');
             
             try {
                 const response = await fetch(`${getBaseUrl()}/api/surveys`);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
                 const data = await response.json();
-                debugLog('Surveys loaded', data);
                 surveys = data;
                 renderSurveys();
+                debugLog('Surveys loaded:', data.length);
             } catch (error) {
-                debugLog('Error loading surveys', error);
+                debugLog('Error loading surveys:', error);
                 showError('Failed to load surveys');
             }
         }
 
+        // Render surveys
         function renderSurveys() {
             const container = document.getElementById('surveys-list');
             
@@ -586,21 +519,61 @@
                             </div>
                         </div>
                         <div class="flex items-center space-x-2">
-                            <button onclick="toggleSurvey('${survey.id}', ${!survey.is_active})" 
-                                    class="px-3 py-1 text-sm rounded ${survey.is_active ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-green-500 hover:bg-green-600 text-white'}">
+                            <button data-survey-id="${survey.id}" data-action="${survey.is_active ? 'deactivate' : 'activate'}" 
+                                    class="survey-toggle-btn px-3 py-1 text-sm rounded ${survey.is_active ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-green-500 hover:bg-green-600 text-white'}">
                                 ${survey.is_active ? 'Deactivate' : 'Activate'}
                             </button>
-                            <button onclick="exportSurvey('${survey.id}')" 
-                                    class="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
+                            <button data-survey-id="${survey.id}" 
+                                    class="survey-export-btn px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600">
                                 Export
                             </button>
                         </div>
                     </div>
                 </div>
             `).join('');
+
+            // Add event listeners to dynamically created buttons
+            document.querySelectorAll('.survey-toggle-btn').forEach(btn => {
+                btn.addEventListener('click', handleToggleSurvey);
+            });
+            
+            document.querySelectorAll('.survey-export-btn').forEach(btn => {
+                btn.addEventListener('click', handleExportSurvey);
+            });
         }
 
-        // Survey creation
+        // Handle toggle survey
+        async function handleToggleSurvey(event) {
+            const surveyId = event.target.dataset.surveyId;
+            const action = event.target.dataset.action;
+            
+            debugLog(`Toggling survey ${surveyId}: ${action}`);
+            
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/surveys/${surveyId}/${action}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const data = await response.json();
+                if (data.success) {
+                    await loadSurveys();
+                    addRecentActivity(`Survey ${action}d`, 'success');
+                }
+            } catch (error) {
+                debugLog('Error toggling survey:', error);
+                showError(`Failed to ${action} survey`);
+            }
+        }
+
+        // Handle export survey
+        function handleExportSurvey(event) {
+            const surveyId = event.target.dataset.surveyId;
+            window.open(`${getBaseUrl()}/api/surveys/${surveyId}/export`, '_blank');
+        }
+
+        // Show create survey modal
         function showCreateSurvey() {
             debugLog('Showing create survey modal');
             document.getElementById('create-survey-modal').classList.add('show');
@@ -608,6 +581,7 @@
             renderQuestions();
         }
 
+        // Hide create survey modal
         function hideCreateSurvey() {
             debugLog('Hiding create survey modal');
             document.getElementById('create-survey-modal').classList.remove('show');
@@ -615,8 +589,9 @@
             questions = [];
         }
 
+        // Add question
         function addQuestion(type) {
-            debugLog('Adding question', type);
+            debugLog('Adding question:', type);
             const question = {
                 id: Date.now(),
                 type: type,
@@ -630,11 +605,13 @@
             renderQuestions();
         }
 
+        // Remove question
         function removeQuestion(questionId) {
             questions = questions.filter(q => q.id !== questionId);
             renderQuestions();
         }
 
+        // Render questions
         function renderQuestions() {
             const container = document.getElementById('questions-container');
             
@@ -651,8 +628,8 @@
                 <div class="border border-gray-200 rounded-lg p-4 mb-4">
                     <div class="flex items-center justify-between mb-3">
                         <h5 class="font-medium text-gray-900">Question ${index + 1} (${question.type})</h5>
-                        <button onclick="removeQuestion(${question.id})" 
-                                class="text-red-500 hover:text-red-700">
+                        <button data-question-id="${question.id}" 
+                                class="remove-question-btn text-red-500 hover:text-red-700">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                             </svg>
@@ -662,9 +639,9 @@
                     <div class="mb-3">
                         <input type="text" 
                                placeholder="Enter your question..." 
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               class="question-text-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                value="${question.question}"
-                               onchange="updateQuestion(${question.id}, 'question', this.value)">
+                               data-question-id="${question.id}">
                     </div>
                     
                     ${question.type === 'multiple' ? `
@@ -672,12 +649,14 @@
                             ${question.options.map((option, optIndex) => `
                                 <div class="flex items-center space-x-2">
                                     <input type="text" 
-                                           class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                           class="option-input flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                            value="${option}"
-                                           onchange="updateOption(${question.id}, ${optIndex}, this.value)">
+                                           data-question-id="${question.id}"
+                                           data-option-index="${optIndex}">
                                     ${question.options.length > 1 ? `
-                                        <button onclick="removeOption(${question.id}, ${optIndex})" 
-                                                class="text-red-500 hover:text-red-700">
+                                        <button data-question-id="${question.id}" 
+                                                data-option-index="${optIndex}"
+                                                class="remove-option-btn text-red-500 hover:text-red-700">
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                                             </svg>
@@ -685,8 +664,8 @@
                                     ` : ''}
                                 </div>
                             `).join('')}
-                            <button onclick="addOption(${question.id})" 
-                                    class="text-blue-500 hover:text-blue-700 text-sm">
+                            <button data-question-id="${question.id}" 
+                                    class="add-option-btn text-blue-500 hover:text-blue-700 text-sm">
                                 + Add Option
                             </button>
                         </div>
@@ -697,23 +676,72 @@
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Min Value</label>
                                 <input type="number" 
-                                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                       class="scale-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                        value="${question.scale.min}"
-                                       onchange="updateScale(${question.id}, 'min', this.value)">
+                                       data-question-id="${question.id}"
+                                       data-scale-field="min">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Max Value</label>
                                 <input type="number" 
-                                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                       class="scale-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                        value="${question.scale.max}"
-                                       onchange="updateScale(${question.id}, 'max', this.value)">
+                                       data-question-id="${question.id}"
+                                       data-scale-field="max">
                             </div>
                         </div>
                     ` : ''}
                 </div>
             `).join('');
+
+            // Add event listeners to dynamically created elements
+            document.querySelectorAll('.remove-question-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const questionId = parseInt(e.currentTarget.dataset.questionId);
+                    removeQuestion(questionId);
+                });
+            });
+
+            document.querySelectorAll('.question-text-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const questionId = parseInt(e.target.dataset.questionId);
+                    updateQuestion(questionId, 'question', e.target.value);
+                });
+            });
+
+            document.querySelectorAll('.option-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const questionId = parseInt(e.target.dataset.questionId);
+                    const optionIndex = parseInt(e.target.dataset.optionIndex);
+                    updateOption(questionId, optionIndex, e.target.value);
+                });
+            });
+
+            document.querySelectorAll('.remove-option-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const questionId = parseInt(e.currentTarget.dataset.questionId);
+                    const optionIndex = parseInt(e.currentTarget.dataset.optionIndex);
+                    removeOption(questionId, optionIndex);
+                });
+            });
+
+            document.querySelectorAll('.add-option-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const questionId = parseInt(e.currentTarget.dataset.questionId);
+                    addOption(questionId);
+                });
+            });
+
+            document.querySelectorAll('.scale-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const questionId = parseInt(e.target.dataset.questionId);
+                    const field = e.target.dataset.scaleField;
+                    updateScale(questionId, field, e.target.value);
+                });
+            });
         }
 
+        // Update question
         function updateQuestion(questionId, field, value) {
             const question = questions.find(q => q.id === questionId);
             if (question) {
@@ -721,6 +749,7 @@
             }
         }
 
+        // Add option
         function addOption(questionId) {
             const question = questions.find(q => q.id === questionId);
             if (question && question.type === 'multiple') {
@@ -729,6 +758,7 @@
             }
         }
 
+        // Remove option
         function removeOption(questionId, optionIndex) {
             const question = questions.find(q => q.id === questionId);
             if (question && question.type === 'multiple' && question.options.length > 1) {
@@ -737,6 +767,7 @@
             }
         }
 
+        // Update option
         function updateOption(questionId, optionIndex, value) {
             const question = questions.find(q => q.id === questionId);
             if (question && question.type === 'multiple') {
@@ -744,103 +775,58 @@
             }
         }
 
+        // Update scale
         function updateScale(questionId, field, value) {
             const question = questions.find(q => q.id === questionId);
             if (question && question.type === 'likert') {
-                question.scale[field] = field === 'min' || field === 'max' ? parseInt(value) : value;
+                question.scale[field] = parseInt(value);
             }
         }
 
-        // Survey actions
-        async function toggleSurvey(surveyId, activate) {
-            debugLog(`Toggling survey ${surveyId}`, activate);
+        // Submit survey
+        async function submitSurvey(event) {
+            event.preventDefault();
+            debugLog('Submitting survey...');
             
+            const formData = new FormData(event.target);
+            const surveyData = {
+                title: formData.get('title'),
+                description: formData.get('description'),
+                estimatedTime: formData.get('estimatedTime'),
+                questions: questions.filter(q => q.question.trim() !== '')
+            };
+
+            if (surveyData.questions.length === 0) {
+                alert('Please add at least one question.');
+                return;
+            }
+
             try {
-                const endpoint = activate ? 'activate' : 'deactivate';
-                const response = await fetch(`${getBaseUrl()}/api/surveys/${surveyId}/${endpoint}`, {
+                const response = await fetch(`${getBaseUrl()}/api/surveys`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
-                    }
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(surveyData)
                 });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
                 const data = await response.json();
                 if (data.success) {
+                    hideCreateSurvey();
                     await loadSurveys();
-                    addRecentActivity(`Survey ${activate ? 'activated' : 'deactivated'}`, 'success');
+                    addRecentActivity(`Survey "${surveyData.title}" created`, 'success');
                 } else {
-                    showError(`Failed to ${activate ? 'activate' : 'deactivate'} survey`);
+                    showError('Error creating survey: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
-                debugLog('Error toggling survey', error);
-                showError(`Failed to ${activate ? 'activate' : 'deactivate'} survey`);
+                debugLog('Error creating survey:', error);
+                showError('Failed to create survey');
             }
         }
 
-        function exportSurvey(surveyId) {
-            debugLog('Exporting survey', surveyId);
-            window.open(`${getBaseUrl()}/api/surveys/${surveyId}/export`, '_blank');
-        }
-
-        // Form submission
-        function setupEventListeners() {
-            debugLog('Setting up event listeners');
-            
-            document.getElementById('survey-form').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                debugLog('Survey form submitted');
-                
-                const formData = new FormData(this);
-                const surveyData = {
-                    title: formData.get('title'),
-                    description: formData.get('description'),
-                    estimatedTime: formData.get('estimatedTime'),
-                    questions: questions.filter(q => q.question.trim() !== '')
-                };
-
-                if (surveyData.questions.length === 0) {
-                    alert('Please add at least one question.');
-                    return;
-                }
-
-                try {
-                    const response = await fetch(`${getBaseUrl()}/api/surveys`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(surveyData)
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-
-                    const data = await response.json();
-                    if (data.success) {
-                        hideCreateSurvey();
-                        await loadSurveys();
-                        addRecentActivity(`Survey "${surveyData.title}" created`, 'success');
-                    } else {
-                        showError('Error creating survey: ' + (data.error || 'Unknown error'));
-                    }
-                } catch (error) {
-                    debugLog('Error creating survey', error);
-                    showError('Failed to create survey. Please check your connection.');
-                }
-            });
-        }
-
-        // Utility functions
-        function refreshData() {
-            debugLog('Refreshing data');
-            loadSurveys();
-        }
-
+        // Add recent activity
         function addRecentActivity(message, type) {
             const container = document.getElementById('recent-activity');
             const activity = document.createElement('div');
@@ -863,44 +849,85 @@
             }
         }
 
+        // Test OpenAI
         async function testOpenAI() {
-            debugLog('Testing OpenAI connection');
+            debugLog('Testing OpenAI...');
             
             try {
                 const response = await fetch(`${getBaseUrl()}/api/openai/test`, {
                     method: 'POST'
                 });
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
                 const data = await response.json();
                 if (data.success) {
                     addRecentActivity('OpenAI connection test successful', 'success');
                 } else {
-                    addRecentActivity('OpenAI connection test failed: ' + (data.error || 'Unknown error'), 'error');
+                    addRecentActivity('OpenAI test failed: ' + (data.error || 'Unknown'), 'error');
                 }
             } catch (error) {
-                debugLog('OpenAI test error', error);
-                addRecentActivity('OpenAI connection test failed', 'error');
+                debugLog('OpenAI test error:', error);
+                addRecentActivity('OpenAI test failed', 'error');
             }
         }
 
-        // Expose functions globally for onclick handlers
-        window.showCreateSurvey = showCreateSurvey;
-        window.hideCreateSurvey = hideCreateSurvey;
-        window.addQuestion = addQuestion;
-        window.removeQuestion = removeQuestion;
-        window.updateQuestion = updateQuestion;
-        window.addOption = addOption;
-        window.removeOption = removeOption;
-        window.updateOption = updateOption;
-        window.updateScale = updateScale;
-        window.toggleSurvey = toggleSurvey;
-        window.exportSurvey = exportSurvey;
-        window.refreshData = refreshData;
-        window.testOpenAI = testOpenAI;
+        // Refresh data
+        async function refreshData() {
+            await loadSurveys();
+            
+            // Also refresh stats
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/stats`);
+                if (response.ok) {
+                    const data = await response.json();
+                    updateStats(data);
+                }
+            } catch (error) {
+                debugLog('Error refreshing stats:', error);
+            }
+        }
+
+        // Initialize on DOM ready
+        document.addEventListener('DOMContentLoaded', function() {
+            debugLog('Initializing application...');
+            
+            // Set base URL
+            document.getElementById('api-base').textContent = getBaseUrl();
+            
+            // Initialize Socket.IO
+            initializeSocket();
+            
+            // Load initial data
+            loadSurveys();
+            refreshData();
+            
+            // Set up event listeners
+            document.getElementById('refresh-btn').addEventListener('click', refreshData);
+            document.getElementById('create-survey-btn').addEventListener('click', showCreateSurvey);
+            document.getElementById('close-modal-btn').addEventListener('click', hideCreateSurvey);
+            document.getElementById('cancel-survey-btn').addEventListener('click', hideCreateSurvey);
+            document.getElementById('survey-form').addEventListener('submit', submitSurvey);
+            
+            // Question type buttons
+            document.getElementById('add-curated-btn').addEventListener('click', () => addQuestion('curated'));
+            document.getElementById('add-multiple-btn').addEventListener('click', () => addQuestion('multiple'));
+            document.getElementById('add-likert-btn').addEventListener('click', () => addQuestion('likert'));
+            document.getElementById('add-text-btn').addEventListener('click', () => addQuestion('text'));
+            
+            // Check API status immediately
+            fetch(`${getBaseUrl()}/api/stats`)
+                .then(response => {
+                    if (response.ok) {
+                        debugLog('API connection successful');
+                    } else {
+                        showError('API connection failed');
+                    }
+                })
+                .catch(error => {
+                    showError('Cannot connect to server');
+                });
+        });
     </script>
 </body>
 </html>
