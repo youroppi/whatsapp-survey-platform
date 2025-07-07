@@ -25,14 +25,40 @@ const logger = {
   debug: (message, data = {}) => process.env.NODE_ENV !== 'production' && console.log(`[DEBUG] ${new Date().toISOString()} - ${message}`, data)
 };
 
-// Express app setup
-const app = express();
-const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.NODE_ENV === 'production' ? false : "*",
-    methods: ["GET", "POST"]
+    origin: process.env.NODE_ENV === 'production' 
+      ? ['https://whatsapp-survey-platform.onrender.com', 'https://*.onrender.com']
+      : "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  // Important for Render.com
+  transports: ['polling', 'websocket'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  upgradeTimeout: 30000,
+  // Allow connections from behind proxies
+  allowRequest: (req, callback) => {
+    callback(null, true); // Allow all connections
   }
+});
+
+// Also update your Express middleware to handle Render's proxy
+app.set('trust proxy', true);
+
+// Add this middleware before your routes
+app.use((req, res, next) => {
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    return res.sendStatus(200);
+  }
+  next();
 });
 
 // Security middleware
