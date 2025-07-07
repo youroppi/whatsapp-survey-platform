@@ -2,28 +2,120 @@ services:
   - type: web
     name: whatsapp-survey-platform
     runtime: node
-    plan: starter
-    buildCommand: npm install
+    plan: starter  # Start with starter, upgrade to standard for production
+    region: singapore  # Choose closest region to your users
+    buildCommand: |
+      npm ci
+      npm run validate
     startCommand: npm start
     healthCheckPath: /health
+    
+    # Auto-deploy configuration
+    autoDeploy: true
+    branch: main
+    
+    # Environment variables
     envVars:
       - key: NODE_ENV
         value: production
+      
       - key: PORT
         generateValue: true
+      
       - key: SESSION_SECRET
         generateValue: true
+      
+      # OpenAI API Configuration
       - key: OPENAI_API_KEY
-        sync: false
+        sync: false  # Set manually in Render dashboard
+      
+      # Voice processing limits
       - key: MAX_VOICE_DURATION_SECONDS
         value: "60"
+      
       - key: VOICE_PROCESSING_TIMEOUT_MS
         value: "30000"
+      
+      # Database connection (will be auto-populated when database is created)
+      - key: DATABASE_URL
+        fromDatabase:
+          name: whatsapp-survey-db
+          property: connectionString
+      
+      # Application configuration
+      - key: MAX_CONCURRENT_SESSIONS
+        value: "100"
+      
+      - key: CLEANUP_INTERVAL_HOURS
+        value: "24"
+      
+      # Logging configuration
+      - key: LOG_LEVEL
+        value: "info"
+    
+    # Persistent disk for WhatsApp session data
     disk:
       name: whatsapp-session-data
       mountPath: /app/.wwebjs_auth
-      sizeGB: 1
+      sizeGB: 2
+    
+    # Resource configuration
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+    
+    # Health check configuration
+    healthCheck:
+      path: /health
+      intervalSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+      successThreshold: 1
 
 databases:
   - name: whatsapp-survey-db
-    plan: starter
+    plan: starter  # Start with starter, upgrade to standard for production
+    region: singapore  # Same region as web service
+    
+    # Database configuration
+    databaseName: whatsapp_survey_platform
+    user: app_user
+    
+    # Automatic backups
+    ipAllowList: []  # Empty means accessible from Render services only
+    
+    # Post-creation script to set up schema
+    postCreateScript: |
+      echo "Setting up database schema..."
+      psql $DATABASE_URL -f database/schema.sql
+      echo "Database setup complete"
+
+# Optional: Background worker for cleanup tasks
+# Uncomment if you want a separate service for maintenance tasks
+# - type: worker
+#   name: whatsapp-survey-worker
+#   runtime: node
+#   plan: starter
+#   buildCommand: npm ci
+#   startCommand: node scripts/worker.js
+#   
+#   envVars:
+#     - key: NODE_ENV
+#       value: production
+#     
+#     - key: DATABASE_URL
+#       fromDatabase:
+#         name: whatsapp-survey-db
+#         property: connectionString
+#     
+#     - key: CLEANUP_INTERVAL_HOURS
+#       value: "6"
+
+# Optional: Redis for session management (for high-traffic scenarios)
+# Uncomment if you need Redis for caching or session storage
+# - type: redis
+#   name: whatsapp-survey-redis
+#   plan: starter
+#   region: singapore
+#   
+#   ipAllowList: []
