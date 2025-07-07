@@ -472,6 +472,12 @@ async function loadActiveSurveys() {
     });
     
     logger.info(`Loaded ${result.rows.length} active surveys`);
+  } catch (error) {
+    if (error.code === '42P01') {
+      logger.warn('Database tables not found. Please run: node database-setup.js');
+    } else {
+      logger.error('Error loading active surveys', error);
+    }
   } finally {
     client.release();
   }
@@ -739,7 +745,17 @@ async function broadcastStats() {
     
     io.emit('survey-stats', result.rows[0]);
   } catch (error) {
-    logger.error('Error broadcasting stats', error);
+    if (error.code === '42P01') {
+      logger.debug('Database tables not found for stats broadcast');
+      io.emit('survey-stats', {
+        total_surveys: 0,
+        total_participants: 0,
+        total_responses: 0,
+        active_survey: null
+      });
+    } else {
+      logger.error('Error broadcasting stats', error);
+    }
   } finally {
     client.release();
   }
@@ -810,7 +826,7 @@ async function initialize() {
     // Initialize WhatsApp client
     initializeWhatsApp();
     
-    // Load active surveys
+    // Try to load active surveys (graceful if tables don't exist)
     await loadActiveSurveys();
     
     // Start server
@@ -818,10 +834,15 @@ async function initialize() {
     server.listen(PORT, () => {
       logger.info(`🎉 Server running on port ${PORT}`);
       logger.info(`📱 Admin dashboard: http://localhost:${PORT}`);
+      logger.info(`🔧 If you see database errors, run: node database-setup.js`);
     });
     
     // Broadcast stats every 30 seconds
-    setInterval(broadcastStats, 30000);
+    setInterval(() => {
+      broadcastStats().catch(error => {
+        logger.debug('Error broadcasting stats (tables may not exist yet)', error);
+      });
+    }, 30000);
     
   } catch (error) {
     logger.error('Failed to initialize application', error);
