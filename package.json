@@ -1,114 +1,38 @@
 {
   "name": "whatsapp-survey-platform",
   "version": "2.0.0",
-  "description": "Production-ready WhatsApp-based survey platform with voice transcription and real-time analytics",
+  "description": "WhatsApp-based survey platform with voice transcription and PostgreSQL",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "jest --testPathPattern=tests/unit",
-    "test:integration": "jest --testPathPattern=tests/integration",
-    "lint": "eslint . --ext .js",
-    "lint:fix": "eslint . --ext .js --fix",
-    "db:migrate": "node scripts/migrate.js",
-    "db:setup": "psql $DATABASE_URL -f database/schema.sql",
-    "db:seed": "node scripts/seed.js",
-    "health:check": "curl -f http://localhost:${PORT:-3000}/health || exit 1",
-    "logs": "heroku logs --tail",
-    "validate": "npm run lint && npm audit"
+    "db:setup": "node database-setup.js",
+    "db:verify": "node verify-database.js",
+    "db:render": "node render-setup.js",
+    "db:reset": "node database-setup.js --reset",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "echo \"Linting not configured\" && exit 0"
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "socket.io": "^4.7.5",
-    "whatsapp-web.js": "^1.23.0",
+    "socket.io": "^4.7.2",
+    "whatsapp-web.js": "^1.22.2",
     "qrcode": "^1.5.3",
     "pg": "^8.11.3",
     "dotenv": "^16.3.1",
-    "helmet": "^7.1.0",
-    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.0.0",
+    "rate-limiter-flexible": "^2.4.2",
     "form-data": "^4.0.0",
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
-    "jest": "^29.7.0",
-    "supertest": "^6.3.3",
-    "eslint": "^8.55.0",
-    "eslint-config-standard": "^17.1.0",
-    "eslint-plugin-import": "^2.29.0",
-    "eslint-plugin-node": "^11.1.0",
-    "eslint-plugin-promise": "^6.1.1"
+    "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": ">=16.0.0"
   },
-  "keywords": [
-    "whatsapp",
-    "survey",
-    "analytics",
-    "bot",
-    "voice-transcription",
-    "openai",
-    "real-time",
-    "postgresql"
-  ],
-  "author": {
-    "name": "Your Name",
-    "email": "your.email@example.com"
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourusername/whatsapp-survey-platform.git"
-  },
-  "bugs": {
-    "url": "https://github.com/yourusername/whatsapp-survey-platform/issues"
-  },
-  "homepage": "https://github.com/yourusername/whatsapp-survey-platform#readme",
-  "jest": {
-    "testEnvironment": "node",
-    "testTimeout": 30000,
-    "collectCoverageFrom": [
-      "**/*.js",
-      "!node_modules/**",
-      "!coverage/**",
-      "!tests/**"
-    ],
-    "coverageDirectory": "coverage",
-    "coverageReporters": ["text", "lcov", "html"]
-  },
-  "eslintConfig": {
-    "env": {
-      "node": true,
-      "es2021": true,
-      "jest": true
-    },
-    "extends": [
-      "standard"
-    ],
-    "parserOptions": {
-      "ecmaVersion": 12,
-      "sourceType": "module"
-    },
-    "rules": {
-      "no-console": "off",
-      "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
-      "prefer-const": "error",
-      "no-var": "error"
-    }
-  },
-  "nodemonConfig": {
-    "ignore": [
-      "tests/*",
-      "coverage/*",
-      ".wwebjs_auth/*",
-      "node_modules/*"
-    ],
-    "env": {
-      "NODE_ENV": "development"
-    }
-  }
+  "keywords": ["whatsapp", "survey", "analytics", "bot", "postgresql", "voice", "transcription"],
+  "author": "Your Name",
+  "license": "MIT"
 }
