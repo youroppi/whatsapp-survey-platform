@@ -349,51 +349,69 @@
             debugLog('Initializing Socket.IO connection');
             
             try {
+                // Fix for Render.com deployment - use polling as primary transport
                 socket = io(getBaseUrl(), {
-                    transports: ['websocket', 'polling'],
+                    transports: ['polling', 'websocket'], // Polling first, then upgrade to websocket
                     reconnection: true,
                     reconnectionAttempts: 5,
-                    reconnectionDelay: 1000
+                    reconnectionDelay: 1000,
+                    timeout: 20000, // Increase timeout for Render
+                    upgrade: true, // Allow upgrading from polling to websocket
+                    // Force new connection
+                    forceNew: true
                 });
                 
                 socket.on('connect', function() {
-                    debugLog('Socket connected');
+                    debugLog('Socket connected via ' + socket.io.engine.transport.name);
                     document.getElementById('socket-status').textContent = 'Connected';
                     updateConnectionStatus('Connected', true);
+                    
+                    // Clear any error messages
+                    const errorDiv = document.querySelector('.bg-red-500');
+                    if (errorDiv) errorDiv.remove();
                 });
-
-                socket.on('disconnect', function() {
-                    debugLog('Socket disconnected');
+        
+                socket.on('disconnect', function(reason) {
+                    debugLog('Socket disconnected: ' + reason);
                     document.getElementById('socket-status').textContent = 'Disconnected';
                     updateConnectionStatus('Disconnected', false);
                 });
-
+        
                 socket.on('connect_error', function(error) {
-                    debugLog('Socket connection error', error);
+                    debugLog('Socket connection error', error.message);
                     document.getElementById('socket-status').textContent = 'Error';
-                    showError('WebSocket connection failed');
+                    
+                    // Don't show error message for every retry
+                    if (socket.io._reconnectionAttempts === 1) {
+                        console.warn('WebSocket failed, using polling transport');
+                    }
                 });
-
+        
+                // Add transport-specific handlers
+                socket.io.on('upgrade', function(transport) {
+                    debugLog('Transport upgraded to: ' + transport.name);
+                });
+        
                 socket.on('whatsapp-ready', function(isReady) {
                     debugLog('WhatsApp status received', isReady);
                     updateWhatsAppStatus(isReady);
                 });
-
+        
                 socket.on('qr-code', function(data) {
                     debugLog('QR code received');
                     displayQRCode(data.qrCode);
                 });
-
+        
                 socket.on('openai-status', function(data) {
                     debugLog('OpenAI status received', data);
                     updateOpenAIStatus(data);
                 });
-
+        
                 socket.on('survey-stats', function(data) {
                     debugLog('Survey stats received', data);
                     updateStats(data);
                 });
-
+        
                 socket.on('new-response', function(data) {
                     debugLog('New response received', data);
                     addRecentActivity(`New response from ${data.participant}`, 'success');
@@ -401,7 +419,17 @@
                 });
             } catch (error) {
                 debugLog('Failed to initialize Socket.IO', error);
-                showError('Failed to initialize real-time connection');
+                // Continue without real-time features
+                console.warn('Real-time features disabled, using API polling instead');
+                
+                // Start polling for updates as fallback
+                setInterval(() => {
+                    loadSurveys();
+                    fetch(`${getBaseUrl()}/api/stats`)
+                        .then(r => r.json())
+                        .then(data => updateStats(data))
+                        .catch(() => {});
+                }, 5000);
             }
         }
 
