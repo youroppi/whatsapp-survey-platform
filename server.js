@@ -414,194 +414,76 @@ async function sendQuestion(session, message) {
   }
 }
 
-    // Fixed processResponse function with duplicate handling
-    async function processResponse(session, message) {
-      const client = await pool.connect();
-      try {
-        // Check if this is a voice confirmation response
-        if (session.stage === 'voice_confirmation') {
-          await handleVoiceConfirmation(session, message, client);
-          return;
-        }
-        
-        // Check if this is a follow-up response
-        if (session.stage === 'followup') {
-          await handleFollowupResponse(session, message, client);
-          return;
-        }
-        
-        const result = await client.query(
-          'SELECT * FROM questions WHERE survey_id = $1 AND question_number = $2',
-          [session.survey_id, session.current_question]
-        );
-        
-        if (result.rows.length === 0) {
-          await message.reply('Something went wrong. Please start over.');
-          return;
-        }
-        
-        const question = result.rows[0];
-        let answer = message.body;
-        let followUpComment = null;
-        let voiceMetadata = null;
-        
-        // Handle voice messages
-        if (message.hasMedia && message.type === 'ptt') {
-          const media = await message.downloadMedia();
-          if (isOpenAIConfigured) {
-            const transcription = await transcribeVoice(media);
-            if (transcription) {
-              answer = transcription;
-              voiceMetadata = { 
-                duration: message.duration || 0,
-                transcribed: true,
-                originalTranscription: transcription
-              };
-              
-              // Store transcription in session for confirmation
-              await client.query(
-                `UPDATE sessions 
-                 SET session_data = jsonb_set(
-                   COALESCE(session_data, '{}'), 
-                   '{pendingVoiceResponse}', 
-                   $1::jsonb
-                 ),
-                 stage = 'voice_confirmation'
-                 WHERE id = $2`,
-                [JSON.stringify({ 
-                  answer, 
-                  questionId: question.id, 
-                  voiceMetadata,
-                  questionType: question.question_type 
-                }), session.id]
-              );
-              
-              // Ask for confirmation
-              await message.reply(`I heard: "${answer}"\n\nIs this correct?\n1. Yes\n2. No, let me try again`);
-              return;
-            } else {
-              answer = 'Voice message (transcription failed)';
-            }
-          } else {
-            answer = 'Voice message (transcription not available)';
-          }
-        }
-        
-        // Validate answer based on question type
-        if (question.question_type === 'multiple' || question.question_type === 'curated') {
-          let options;
-          try {
-            options = typeof question.options === 'string' 
-              ? JSON.parse(question.options) 
-              : question.options;
-          } catch (e) {
-            // Handle comma-separated string
-            if (typeof question.options === 'string' && question.options.includes(',')) {
-              options = question.options.split(',').map(opt => opt.trim());
-            } else {
-              options = ['Option 1', 'Option 2'];
-            }
-          }
+// Fixed processResponse function with duplicate handling
+async function processResponse(session, message) {
+  const client = await pool.connect();
+  try {
+    // Check if this is a voice confirmation response
+    if (session.stage === 'voice_confirmation') {
+      await handleVoiceConfirmation(session, message, client);
+      return;
+    }
+    
+    // Check if this is a follow-up response
+    if (session.stage === 'followup') {
+      await handleFollowupResponse(session, message, client);
+      return;
+    }
+    
+    const result = await client.query(
+      'SELECT * FROM questions WHERE survey_id = $1 AND question_number = $2',
+      [session.survey_id, session.current_question]
+    );
+    
+    if (result.rows.length === 0) {
+      await message.reply('Something went wrong. Please start over.');
+      return;
+    }
+    
+    const question = result.rows[0];
+    let answer = message.body;
+    let followUpComment = null;
+    let voiceMetadata = null;
+    
+    // Handle voice messages
+    if (message.hasMedia && message.type === 'ptt') {
+      const media = await message.downloadMedia();
+      if (isOpenAIConfigured) {
+        const transcription = await transcribeVoice(media);
+        if (transcription) {
+          answer = transcription;
+          voiceMetadata = { 
+            duration: message.duration || 0,
+            transcribed: true,
+            originalTranscription: transcription
+          };
           
-          const choice = parseInt(answer);
-          if (choice >= 1 && choice <= options.length) {
-            answer = options[choice - 1];
-          } else {
-            await message.reply(`Please reply with a number between 1 and ${options.length}.`);
-            return;
-          }
-        } else if (question.question_type === 'likert') {
-          let scale;
-          try {
-            scale = typeof question.scale === 'string' 
-              ? JSON.parse(question.scale) 
-              : question.scale;
-          } catch (e) {
-            scale = { min: 1, max: 5 };
-          }
-          
-          const rating = parseInt(answer);
-          if (rating >= scale.min && rating <= scale.max) {
-            answer = rating.toString();
-          } else {
-            await message.reply(`Please reply with a number between ${scale.min} and ${scale.max}.`);
-            return;
-          }
-        }
-        
-        // Check if response already exists
-        const existingResponse = await client.query(
-          'SELECT id FROM responses WHERE survey_id = $1 AND participant_id = $2 AND question_id = $3',
-          [session.survey_id, session.participant_id, question.id]
-        );
-        
-        if (existingResponse.rows.length > 0) {
-          // Update existing response instead of inserting
-          await client.query(
-            'UPDATE responses SET answer = $1, voice_metadata = $2, created_at = CURRENT_TIMESTAMP WHERE survey_id = $3 AND participant_id = $4 AND question_id = $5',
-            [answer, voiceMetadata ? JSON.stringify(voiceMetadata) : null, session.survey_id, session.participant_id, question.id]
-          );
-          logger.info(`Updated existing response for participant ${session.participant_id}, question ${question.id}`);
-        } else {
-          // Insert new response
-          await client.query(
-            'INSERT INTO responses (survey_id, participant_id, question_id, answer, follow_up_comment, voice_metadata) VALUES ($1, $2, $3, $4, $5, $6)',
-            [session.survey_id, session.participant_id, question.id, answer, followUpComment, voiceMetadata ? JSON.stringify(voiceMetadata) : null]
-          );
-        }
-        
-        // Send confirmation
-        await message.reply(`Thank you! Your answer: "${answer}"`);
-        
-        // Broadcast new response for real-time analytics
-        const responseData = {
-          surveyId: session.survey_id,
-          participantId: session.participant_id,
-          phoneNumber: session.phone_number,
-          question: question.question_text,
-          answer: answer,
-          timestamp: new Date().toISOString()
-        };
-        io.emit('new-response', responseData);
-        
-        // Ask follow-up for text responses
-        if (question.question_type === 'text' && isOpenAIConfigured) {
+          // Store transcription in session for confirmation
           await client.query(
             `UPDATE sessions 
-             SET stage = 'followup',
-                 session_data = jsonb_set(
-                   COALESCE(session_data, '{}'), 
-                   '{lastQuestionId}', 
-                   $1::jsonb
-                 )
+             SET session_data = jsonb_set(
+               COALESCE(session_data, '{}'), 
+               '{pendingVoiceResponse}', 
+               $1::jsonb
+             ),
+             stage = 'voice_confirmation'
              WHERE id = $2`,
-            [question.id.toString(), session.id]
+            [JSON.stringify({ 
+              answer, 
+              questionId: question.id, 
+              voiceMetadata,
+              questionType: question.question_type 
+            }), session.id]
           );
           
-          await message.reply(`Would you like to elaborate on your answer? You can send a voice message or type "skip" to continue.`);
+          // Ask for confirmation
+          await message.reply(`I heard: "${answer}"\n\nIs this correct?\n1. Yes\n2. No, let me try again`);
           return;
-        }
-        
-        // Move to next question
-        await sendQuestion(session, message);
-        
-      } catch (error) {
-        logger.error('Error in processResponse', error);
-        
-        // If it's a duplicate key error, try to recover gracefully
-        if (error.code === '23505') {
-          logger.warn('Duplicate response detected, moving to next question');
-          try {
-            await sendQuestion(session, message);
-          } catch (sendError) {
-            logger.error('Error sending next question after duplicate', sendError);
-            await message.reply('Sorry, something went wrong. Please try again.');
-          }
         } else {
-          await message.reply('Sorry, something went wrong. Please try again.');
+          answer = 'Voice message (transcription failed)';
         }
-      } finally {
-        client.release();
+      } else {
+        answer = 'Voice message (transcription not available)';
       }
     }
     
@@ -647,11 +529,26 @@ async function sendQuestion(session, message) {
       }
     }
     
-    // Save response
-    await client.query(
-      'INSERT INTO responses (survey_id, participant_id, question_id, answer, follow_up_comment, voice_metadata) VALUES ($1, $2, $3, $4, $5, $6)',
-      [session.survey_id, session.participant_id, question.id, answer, followUpComment, voiceMetadata ? JSON.stringify(voiceMetadata) : null]
+    // Check if response already exists
+    const existingResponse = await client.query(
+      'SELECT id FROM responses WHERE survey_id = $1 AND participant_id = $2 AND question_id = $3',
+      [session.survey_id, session.participant_id, question.id]
     );
+    
+    if (existingResponse.rows.length > 0) {
+      // Update existing response instead of inserting
+      await client.query(
+        'UPDATE responses SET answer = $1, voice_metadata = $2, created_at = CURRENT_TIMESTAMP WHERE survey_id = $3 AND participant_id = $4 AND question_id = $5',
+        [answer, voiceMetadata ? JSON.stringify(voiceMetadata) : null, session.survey_id, session.participant_id, question.id]
+      );
+      logger.info(`Updated existing response for participant ${session.participant_id}, question ${question.id}`);
+    } else {
+      // Insert new response
+      await client.query(
+        'INSERT INTO responses (survey_id, participant_id, question_id, answer, follow_up_comment, voice_metadata) VALUES ($1, $2, $3, $4, $5, $6)',
+        [session.survey_id, session.participant_id, question.id, answer, followUpComment, voiceMetadata ? JSON.stringify(voiceMetadata) : null]
+      );
+    }
     
     // Send confirmation
     await message.reply(`Thank you! Your answer: "${answer}"`);
@@ -690,7 +587,19 @@ async function sendQuestion(session, message) {
     
   } catch (error) {
     logger.error('Error in processResponse', error);
-    await message.reply('Sorry, something went wrong. Please try again.');
+    
+    // If it's a duplicate key error, try to recover gracefully
+    if (error.code === '23505') {
+      logger.warn('Duplicate response detected, moving to next question');
+      try {
+        await sendQuestion(session, message);
+      } catch (sendError) {
+        logger.error('Error sending next question after duplicate', sendError);
+        await message.reply('Sorry, something went wrong. Please try again.');
+      }
+    } else {
+      await message.reply('Sorry, something went wrong. Please try again.');
+    }
   } finally {
     client.release();
   }
