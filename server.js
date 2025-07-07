@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const FormData = require('form-data');
 const fetch = require('node-fetch');
+const { Pool } = require('pg');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,18 +21,35 @@ const io = socketIo(server, {
   }
 });
 
+// PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// Test database connection
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('Database connection error:', err);
+  } else {
+    console.log('Database connected successfully at:', res.rows[0].now);
+  }
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
 // Security and Environment Configuration
-const requiredEnvVars = ['OPENAI_API_KEY'];
+const requiredEnvVars = ['OPENAI_API_KEY', 'DATABASE_URL'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
   console.warn('Warning: Missing required environment variables:', missingEnvVars.join(', '));
-  console.warn('Warning: Voice transcription features will be disabled without OPENAI_API_KEY');
+  if (missingEnvVars.includes('OPENAI_API_KEY')) {
+    console.warn('Warning: Voice transcription features will be disabled without OPENAI_API_KEY');
+  }
 }
 
 // OpenAI configuration - SECURED with environment variables
@@ -58,12 +76,68 @@ if (!isOpenAIConfigured) {
   console.warn('Set OPENAI_API_KEY environment variable to enable voice features.');
 }
 
-// In-memory storage (replace with PostgreSQL in production)
-let surveys = [];
-let responses = [];
-let activeSurveys = new Map();
-let userSessions = new Map();
+// Connected clients tracking
 let connectedClients = new Set();
+
+// Database helper functions
+async function getOrCreateParticipant(phoneNumber) {
+  const client = await pool.connect();
+  try {
+    // Check if participant exists
+    let result = await client.query(
+      'SELECT id, participant_code FROM participants WHERE phone_number = $1',
+      [phoneNumber]
+    );
+    
+    if (result.rows.length > 0) {
+      return result.rows[0];
+    }
+    
+    // Create new participant with a generic code
+    const participantCode = `P${Date.now().toString(36).toUpperCase()}`;
+    result = await client.query(
+      'INSERT INTO participants (phone_number, participant_code) VALUES ($1, $2) RETURNING id, participant_code',
+      [phoneNumber, participantCode]
+    );
+    
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+
+async function getOrCreateSurveyParticipant(surveyId, participantId) {
+  const client = await pool.connect();
+  try {
+    // Check if already exists
+    let result = await client.query(
+      'SELECT participant_survey_code FROM survey_participants WHERE survey_id = $1 AND participant_id = $2',
+      [surveyId, participantId]
+    );
+    
+    if (result.rows.length > 0) {
+      return result.rows[0].participant_survey_code;
+    }
+    
+    // Get next participant code for this survey
+    result = await client.query(
+      'SELECT get_next_participant_code($1) as code',
+      [surveyId]
+    );
+    
+    const participantSurveyCode = result.rows[0].code;
+    
+    // Create survey participant record
+    await client.query(
+      'INSERT INTO survey_participants (survey_id, participant_id, participant_survey_code) VALUES ($1, $2, $3)',
+      [surveyId, participantId, participantSurveyCode]
+    );
+    
+    return participantSurveyCode;
+  } finally {
+    client.release();
+  }
+}
 
 // Voice message processing functions
 async function transcribeVoiceMessage(audioBuffer, fileName) {
@@ -140,14 +214,14 @@ async function translateToEnglish(text, detectedLanguage) {
 
     if (!response.ok) {
       console.error('Translation API error:', response.status);
-      return text; // Return original text if translation fails
+      return text;
     }
 
     const result = await response.json();
     return result.choices[0].message.content.trim();
   } catch (error) {
     console.error('Translation error:', error);
-    return text; // Return original text if translation fails
+    return text;
   }
 }
 
@@ -168,7 +242,7 @@ async function generateContextualSummary(transcribedText, originalText, language
         messages: [
           {
             role: 'system',
-            content: `You are an AI assistant that creates clear, concise summaries of survey responses in relation to the question asked. Your task is to summarize what the user said in a way that directly relates to the survey question.
+            content: `You are an AI assistant that creates clear, concise summaries of survey responses in relation to the question asked.
 
 Rules:
 1. Create a brief, clear summary of the user's response
@@ -236,7 +310,6 @@ client.on('qr', (qr) => {
       return;
     }
     qrCodeData = url;
-    // Broadcast QR code to all connected admin clients
     io.emit('qr-code', { qrCode: url });
   });
 });
@@ -256,7 +329,7 @@ client.on('disconnected', (reason) => {
 
 // Handle incoming WhatsApp messages
 client.on('message', async (message) => {
-  if (message.from.endsWith('@c.us')) { // Only handle direct messages
+  if (message.from.endsWith('@c.us')) {
     await handleWhatsAppMessage(message);
   }
 });
@@ -265,33 +338,195 @@ client.on('message', async (message) => {
 client.initialize();
 
 // Survey management functions
-function createSurvey(surveyData) {
-  const survey = {
-    id: Date.now().toString(),
-    ...surveyData,
-    createdAt: new Date(),
-    isActive: false,
-    participants: 0,
-    responses: 0
-  };
-  surveys.push(survey);
-  return survey;
-}
-
-function activateSurvey(surveyId) {
-  const survey = surveys.find(s => s.id === surveyId);
-  if (survey) {
-    // Deactivate all other surveys
-    surveys.forEach(s => s.isActive = false);
-    survey.isActive = true;
-    activeSurveys.set(surveyId, survey);
-    return survey;
+async function createSurvey(surveyData) {
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+    
+    // Generate survey ID and prefix
+    const surveyId = Date.now().toString();
+    const surveyPrefix = surveyData.title
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .substring(0, 10) || 'SURVEY';
+    
+    // Insert survey
+    await dbClient.query(
+      `INSERT INTO surveys (id, title, estimated_time, participant_prefix) 
+       VALUES ($1, $2, $3, $4)`,
+      [surveyId, surveyData.title, surveyData.estimatedTime, surveyPrefix]
+    );
+    
+    // Insert questions
+    for (let i = 0; i < surveyData.questions.length; i++) {
+      const question = surveyData.questions[i];
+      await dbClient.query(
+        `INSERT INTO questions (survey_id, question_number, question_type, question_text, options, scale)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          surveyId,
+          i + 1,
+          question.type,
+          question.question,
+          question.type === 'multiple' || question.type === 'curated' ? JSON.stringify(question.options) : null,
+          question.type === 'likert' ? JSON.stringify(question.scale) : null
+        ]
+      );
+    }
+    
+    await dbClient.query('COMMIT');
+    
+    // Return the created survey
+    const result = await dbClient.query(
+      'SELECT * FROM surveys WHERE id = $1',
+      [surveyId]
+    );
+    
+    return {
+      ...result.rows[0],
+      questions: surveyData.questions
+    };
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    console.error('Error creating survey:', error);
+    throw error;
+  } finally {
+    dbClient.release();
   }
-  return null;
 }
 
-function getActiveSurvey() {
-  return surveys.find(s => s.isActive);
+async function activateSurvey(surveyId) {
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+    
+    // Deactivate all surveys
+    await dbClient.query('UPDATE surveys SET is_active = false');
+    
+    // Activate the specified survey
+    const result = await dbClient.query(
+      'UPDATE surveys SET is_active = true WHERE id = $1 RETURNING *',
+      [surveyId]
+    );
+    
+    await dbClient.query('COMMIT');
+    
+    if (result.rows.length > 0) {
+      return result.rows[0];
+    }
+    return null;
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    console.error('Error activating survey:', error);
+    throw error;
+  } finally {
+    dbClient.release();
+  }
+}
+
+async function getActiveSurvey() {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM surveys WHERE is_active = true LIMIT 1'
+    );
+    
+    if (result.rows.length > 0) {
+      const survey = result.rows[0];
+      
+      // Get questions for the survey
+      const questionsResult = await pool.query(
+        'SELECT * FROM questions WHERE survey_id = $1 ORDER BY question_number',
+        [survey.id]
+      );
+      
+      survey.questions = questionsResult.rows.map(q => ({
+        id: q.id,
+        type: q.question_type,
+        question: q.question_text,
+        options: q.options,
+        scale: q.scale
+      }));
+      
+      return survey;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting active survey:', error);
+    return null;
+  }
+}
+
+// Session management
+async function getOrCreateSession(phoneNumber, activeSurvey) {
+  const dbClient = await pool.connect();
+  try {
+    // Get participant
+    const participant = await getOrCreateParticipant(phoneNumber);
+    
+    // Check for existing session
+    let result = await dbClient.query(
+      'SELECT * FROM sessions WHERE phone_number = $1 AND survey_id = $2',
+      [phoneNumber, activeSurvey.id]
+    );
+    
+    if (result.rows.length > 0) {
+      const session = result.rows[0];
+      return {
+        ...session,
+        sessionData: session.session_data || {}
+      };
+    }
+    
+    // Create new session
+    result = await dbClient.query(
+      `INSERT INTO sessions (phone_number, survey_id, participant_id, session_data)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [phoneNumber, activeSurvey.id, participant.id, JSON.stringify({})]
+    );
+    
+    return {
+      ...result.rows[0],
+      sessionData: {}
+    };
+  } finally {
+    dbClient.release();
+  }
+}
+
+async function updateSession(sessionId, updates) {
+  try {
+    const setClause = [];
+    const values = [];
+    let paramCount = 1;
+    
+    if (updates.currentQuestion !== undefined) {
+      setClause.push(`current_question = $${paramCount}`);
+      values.push(updates.currentQuestion);
+      paramCount++;
+    }
+    
+    if (updates.stage !== undefined) {
+      setClause.push(`stage = $${paramCount}`);
+      values.push(updates.stage);
+      paramCount++;
+    }
+    
+    if (updates.sessionData !== undefined) {
+      setClause.push(`session_data = $${paramCount}`);
+      values.push(JSON.stringify(updates.sessionData));
+      paramCount++;
+    }
+    
+    values.push(sessionId);
+    
+    await pool.query(
+      `UPDATE sessions SET ${setClause.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramCount}`,
+      values
+    );
+  } catch (error) {
+    console.error('Error updating session:', error);
+  }
 }
 
 // WhatsApp message handling
@@ -302,21 +537,7 @@ async function handleWhatsAppMessage(message) {
   
   console.log(`Received ${isVoiceMessage ? 'voice' : 'text'} message from ${phoneNumber}`);
   
-  // Get or create user session
-  let session = userSessions.get(phoneNumber);
-  if (!session) {
-    session = {
-      phoneNumber,
-      currentQuestion: 0,
-      responses: [],
-      surveyId: null,
-      stage: 'initial',
-      pendingVoiceValidation: null
-    };
-    userSessions.set(phoneNumber, session);
-  }
-
-  const activeSurvey = getActiveSurvey();
+  const activeSurvey = await getActiveSurvey();
   
   if (!activeSurvey) {
     await client.sendMessage(phoneNumber, 
@@ -324,7 +545,10 @@ async function handleWhatsAppMessage(message) {
     );
     return;
   }
-
+  
+  // Get or create session
+  const session = await getOrCreateSession(phoneNumber, activeSurvey);
+  
   // Handle different conversation stages
   switch (session.stage) {
     case 'initial':
@@ -343,27 +567,30 @@ async function handleWhatsAppMessage(message) {
 }
 
 async function handleInitialMessage(phoneNumber, session, survey) {
-  session.surveyId = survey.id;
-  session.stage = 'survey';
+  // Get or create survey participant
+  const participantCode = await getOrCreateSurveyParticipant(survey.id, session.participant_id);
   
-  // Send welcome message and first question
-  const welcomeMessage = `Welcome to our survey! 📊\n\n*${survey.title}*\n\nThis will take about ${survey.estimatedTime || '3-5'} minutes. Let's get started!\n\n`;
+  // Update session
+  await updateSession(session.id, {
+    stage: 'survey',
+    sessionData: { participantCode }
+  });
+  
+  // Send welcome message
+  const welcomeMessage = `Welcome to our survey! 📊\n\n*${survey.title}*\n\nThis will take about ${survey.estimated_time || '3-5'} minutes. Let's get started!\n\nYour participant ID: ${participantCode}`;
   
   await client.sendMessage(phoneNumber, welcomeMessage);
   await sendCurrentQuestion(phoneNumber, session, survey);
   
-  // Update survey stats
-  survey.participants++;
   broadcastSurveyStats();
 }
 
 async function sendCurrentQuestion(phoneNumber, session, survey) {
-  const question = survey.questions[session.currentQuestion];
+  const question = survey.questions[session.current_question];
   if (!question) return;
 
-  let questionText = `*Question ${session.currentQuestion + 1}/${survey.questions.length}*\n\n${question.question}\n\n`;
+  let questionText = `*Question ${session.current_question + 1}/${survey.questions.length}*\n\n${question.question}\n\n`;
   
-  // Add options based on question type
   switch (question.type) {
     case 'curated':
       questionText += question.options.map((option, index) => 
@@ -380,10 +607,11 @@ async function sendCurrentQuestion(phoneNumber, session, survey) {
       break;
     
     case 'likert':
-      questionText += `Rate from ${question.scale.min} to ${question.scale.max}\n`;
-      questionText += `${question.scale.min} = ${question.scale.labels[0]}\n`;
-      questionText += `${question.scale.max} = ${question.scale.labels[1]}\n\n`;
-      questionText += `Reply with a number from ${question.scale.min} to ${question.scale.max}`;
+      const scale = question.scale;
+      questionText += `Rate from ${scale.min} to ${scale.max}\n`;
+      questionText += `${scale.min} = ${scale.labels[0]}\n`;
+      questionText += `${scale.max} = ${scale.labels[1]}\n\n`;
+      questionText += `Reply with a number from ${scale.min} to ${scale.max}`;
       break;
     
     case 'text':
@@ -395,11 +623,10 @@ async function sendCurrentQuestion(phoneNumber, session, survey) {
 }
 
 async function handleSurveyResponse(phoneNumber, session, survey, messageText, isVoiceMessage, message) {
-  const question = survey.questions[session.currentQuestion];
+  const question = survey.questions[session.current_question];
   let selectedAnswer = null;
   let isValidAnswer = false;
 
-  // Handle voice messages for survey responses (usually not needed for multiple choice)
   if (isVoiceMessage) {
     await client.sendMessage(phoneNumber, 
       "I received your voice message! For survey questions, please respond with the number of your choice or type your answer. You can use voice messages for follow-up explanations!"
@@ -420,7 +647,8 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
     
     case 'likert':
       const rating = parseInt(messageText);
-      if (rating >= question.scale.min && rating <= question.scale.max) {
+      const scale = question.scale;
+      if (rating >= scale.min && rating <= scale.max) {
         selectedAnswer = rating;
         isValidAnswer = true;
       }
@@ -439,21 +667,21 @@ async function handleSurveyResponse(phoneNumber, session, survey, messageText, i
     return;
   }
 
-  // Store response
-  const response = {
-    phoneNumber,
-    surveyId: survey.id,
-    questionId: question.id,
-    questionText: question.question,
-    answer: selectedAnswer,
-    timestamp: new Date()
+  // Store the answer temporarily in session
+  const sessionData = {
+    ...session.sessionData,
+    pendingAnswer: {
+      questionId: question.id,
+      answer: selectedAnswer
+    }
   };
   
-  session.responses.push(response);
-  responses.push(response);
+  await updateSession(session.id, {
+    stage: 'followup',
+    sessionData
+  });
 
   // Ask for follow-up
-  session.stage = 'followup';
   const followUpMessage = `Great! Could you tell me why you chose that answer?\n\nYou can:\n🎤 Send a voice message (I'll transcribe it)\n💬 Type your response\n⏭️ Type 'skip' to continue\n\nI'd love to hear your thoughts!`;
   
   await client.sendMessage(phoneNumber, followUpMessage);
@@ -463,7 +691,6 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
   let followUpText = '';
 
   if (isVoiceMessage) {
-    // Check if voice transcription is available
     if (!isOpenAIConfigured) {
       await client.sendMessage(phoneNumber, 
         "I received your voice message, but voice transcription is not available right now. Could you please type your response instead? Or type 'skip' to continue."
@@ -472,36 +699,24 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
     }
 
     try {
-      // Show processing message
-      await client.sendMessage(phoneNumber, 
-        "🎵 Processing your voice message... This may take a moment!"
-      );
+      await client.sendMessage(phoneNumber, "🎵 Processing your voice message... This may take a moment!");
 
-      // Download and process voice message
       const media = await message.downloadMedia();
       const audioBuffer = Buffer.from(media.data, 'base64');
       
-      // Check voice duration (basic validation)
-      if (audioBuffer.length > MAX_VOICE_DURATION * 1024 * 1024) { // Rough size check
+      if (audioBuffer.length > MAX_VOICE_DURATION * 1024 * 1024) {
         await client.sendMessage(phoneNumber, 
           `Voice message is too long. Please keep it under ${MAX_VOICE_DURATION} seconds and try again.`
         );
         return;
       }
       
-      // Transcribe with OpenAI Whisper
       const transcription = await transcribeVoiceMessage(audioBuffer, 'voice_message.ogg');
-      
-      // Translate to English if needed
       const translatedText = await translateToEnglish(transcription.text, transcription.language);
       
-      // Get the current question for context
-      const question = survey.questions[session.currentQuestion];
-      
-      // Generate a contextual summary
+      const question = survey.questions[session.current_question];
       const summary = await generateContextualSummary(translatedText, transcription.text, transcription.language, question.question);
       
-      // Always show transcription and summary - no validation rejection
       let confirmationMessage = `🎤 Here's what you said:\n\n"${transcription.text}"`;
       
       if (transcription.language !== 'en') {
@@ -509,20 +724,23 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
       }
       
       confirmationMessage += `\n\n📝 Summary of your response:\n"${summary}"`;
-      
       confirmationMessage += `\n\nIs this what you meant?\n✅ Type 'yes' to confirm\n❌ Type 'no' to try again\n⏭️ Type 'skip' to continue without this response`;
       
-      // Store pending validation with the summary
-      session.pendingVoiceValidation = {
-        originalText: transcription.text,
-        translatedText: translatedText,
-        summary: summary,
-        language: transcription.language,
-        duration: transcription.duration
+      const sessionData = {
+        ...session.sessionData,
+        pendingVoiceValidation: {
+          originalText: transcription.text,
+          translatedText: translatedText,
+          summary: summary,
+          language: transcription.language,
+          duration: transcription.duration
+        }
       };
       
-      // Ask for confirmation
-      session.stage = 'voice_confirmation';
+      await updateSession(session.id, {
+        stage: 'voice_confirmation',
+        sessionData
+      });
       
       await client.sendMessage(phoneNumber, confirmationMessage);
       return;
@@ -530,7 +748,6 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
     } catch (error) {
       console.error('Voice processing error:', error);
       
-      // Specific error messages based on error type
       let errorMessage = "Sorry, I couldn't process your voice message.";
       
       if (error.message.includes('API key')) {
@@ -547,194 +764,304 @@ async function handleFollowUpResponse(phoneNumber, session, survey, messageText,
       return;
     }
   } else {
-    // Handle text response
     followUpText = messageText;
   }
 
-  // Process the follow-up (for text responses or confirmed voice responses)
   await processFollowUpResponse(phoneNumber, session, survey, followUpText);
 }
 
 async function handleVoiceConfirmation(phoneNumber, session, survey, messageText) {
   const response = messageText.toLowerCase().trim();
+  const sessionData = session.sessionData || {};
   
   if (response === 'yes' || response === 'y' || response === 'correct') {
-    // User confirmed the transcription
-    const voiceData = session.pendingVoiceValidation;
+    const voiceData = sessionData.pendingVoiceValidation;
     await processFollowUpResponse(phoneNumber, session, survey, voiceData.summary, voiceData);
   } else if (response === 'no' || response === 'n' || response === 'incorrect') {
-    // User rejected the transcription
-    session.stage = 'followup';
-    session.pendingVoiceValidation = null;
-    const retryMessage = "No problem! Let's try again.\n\nYou can:\n🎤 Send another voice message\n💬 Type your response\n⏭️ Type 'skip' to continue";
+    await updateSession(session.id, {
+      stage: 'followup',
+      sessionData: {
+        ...sessionData,
+        pendingVoiceValidation: null
+      }
+    });
     
+    const retryMessage = "No problem! Let's try again.\n\nYou can:\n🎤 Send another voice message\n💬 Type your response\n⏭️ Type 'skip' to continue";
     await client.sendMessage(phoneNumber, retryMessage);
   } else if (response === 'skip') {
-    // User wants to skip
-    session.pendingVoiceValidation = null;
     await processFollowUpResponse(phoneNumber, session, survey, '');
   } else {
-    // Invalid response
     const helpMessage = "Please respond with:\n✅ 'yes' to confirm\n❌ 'no' to try again\n⏭️ 'skip' to continue";
-    
     await client.sendMessage(phoneNumber, helpMessage);
   }
 }
 
 async function processFollowUpResponse(phoneNumber, session, survey, followUpText, voiceData = null) {
-  // Store follow-up if provided
-  if (followUpText && followUpText !== 'skip' && followUpText.length > 0) {
-    const lastResponse = session.responses[session.responses.length - 1];
-    lastResponse.followUp = followUpText;
-    
-    // Add voice metadata if available
-    if (voiceData) {
-      lastResponse.voiceMetadata = {
-        originalLanguage: voiceData.language,
-        originalText: voiceData.originalText,
-        translatedText: voiceData.translatedText,
-        duration: voiceData.duration,
-        wasTranscribed: true
-      };
-    }
-    
-    // Update the response in the main responses array
-    const mainResponse = responses.find(r => 
-      r.phoneNumber === phoneNumber && 
-      r.questionId === lastResponse.questionId &&
-      r.timestamp.getTime() === lastResponse.timestamp.getTime()
-    );
-    if (mainResponse) {
-      mainResponse.followUp = followUpText;
-      if (voiceData) {
-        mainResponse.voiceMetadata = lastResponse.voiceMetadata;
-      }
-    }
-  }
-
-  // Move to next question or finish survey
-  session.currentQuestion++;
-  session.stage = 'survey';
-  session.pendingVoiceValidation = null;
+  const sessionData = session.sessionData || {};
+  const pendingAnswer = sessionData.pendingAnswer;
   
-  if (session.currentQuestion >= survey.questions.length) {
+  if (pendingAnswer) {
+    // Store response in database
+    const voiceMetadata = voiceData ? {
+      originalLanguage: voiceData.language,
+      originalText: voiceData.originalText,
+      translatedText: voiceData.translatedText,
+      duration: voiceData.duration,
+      wasTranscribed: true
+    } : null;
+    
+    await pool.query(
+      `INSERT INTO responses (survey_id, participant_id, question_id, answer, follow_up_comment, voice_metadata)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        survey.id,
+        session.participant_id,
+        pendingAnswer.questionId,
+        pendingAnswer.answer.toString(),
+        followUpText && followUpText !== 'skip' ? followUpText : null,
+        voiceMetadata ? JSON.stringify(voiceMetadata) : null
+      ]
+    );
+  }
+  
+  // Move to next question
+  const nextQuestion = session.current_question + 1;
+  
+  if (nextQuestion >= survey.questions.length) {
     // Survey complete
-    const completionMessage = `Thank you for completing the survey!\n\nYour responses have been recorded, including your voice messages. Your feedback is valuable to us!\n\nHave a great day!`;
+    const participantCode = sessionData.participantCode;
+    
+    // Mark survey as completed
+    await pool.query(
+      `UPDATE survey_participants 
+       SET completed_at = CURRENT_TIMESTAMP, 
+           is_completed = true,
+           completion_duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - started_at))
+       WHERE survey_id = $1 AND participant_id = $2`,
+      [survey.id, session.participant_id]
+    );
+    
+    const completionMessage = `Thank you for completing the survey!\n\nYour participant ID: ${participantCode}\n\nYour responses have been recorded. Your feedback is valuable to us!\n\nHave a great day!`;
     
     await client.sendMessage(phoneNumber, completionMessage);
     
-    // Update survey stats
-    survey.responses++;
-    userSessions.delete(phoneNumber);
+    // Delete session
+    await pool.query('DELETE FROM sessions WHERE id = $1', [session.id]);
     
     broadcastSurveyStats();
     broadcastNewResponse();
   } else {
-    // Next question
-    const progress = Math.round((session.currentQuestion / survey.questions.length) * 100);
+    // Continue to next question
+    await updateSession(session.id, {
+      current_question: nextQuestion,
+      stage: 'survey',
+      sessionData: {
+        ...sessionData,
+        pendingAnswer: null,
+        pendingVoiceValidation: null
+      }
+    });
+    
+    const progress = Math.round((nextQuestion / survey.questions.length) * 100);
     const progressMessage = `Thank you for sharing!\n\nProgress: ${progress}% complete\n\n---\n\nLet's continue...`;
     
     await client.sendMessage(phoneNumber, progressMessage);
     
-    await sendCurrentQuestion(phoneNumber, session, survey);
+    // Refresh session to get updated values
+    const updatedSession = await pool.query(
+      'SELECT * FROM sessions WHERE id = $1',
+      [session.id]
+    );
+    
+    await sendCurrentQuestion(phoneNumber, updatedSession.rows[0], survey);
   }
 }
 
 // Real-time broadcasting functions
-function broadcastSurveyStats() {
-  const stats = surveys.map(survey => ({
-    ...survey,
-    responses: responses.filter(r => r.surveyId === survey.id).length
-  }));
-  
-  io.emit('survey-stats', stats);
+async function broadcastSurveyStats() {
+  try {
+    const stats = await pool.query('SELECT * FROM survey_statistics');
+    io.emit('survey-stats', stats.rows);
+  } catch (error) {
+    console.error('Error broadcasting survey stats:', error);
+  }
 }
 
-function broadcastNewResponse() {
-  const recentResponses = responses.slice(-10); // Last 10 responses
-  io.emit('new-responses', recentResponses);
+async function broadcastNewResponse() {
+  try {
+    const recentResponses = await pool.query(
+      `SELECT r.*, p.participant_code, sp.participant_survey_code, q.question_text
+       FROM responses r
+       JOIN participants p ON r.participant_id = p.id
+       JOIN survey_participants sp ON sp.survey_id = r.survey_id AND sp.participant_id = r.participant_id
+       JOIN questions q ON r.question_id = q.id
+       ORDER BY r.created_at DESC
+       LIMIT 10`
+    );
+    
+    io.emit('new-responses', recentResponses.rows);
+  } catch (error) {
+    console.error('Error broadcasting new responses:', error);
+  }
 }
 
 // API Routes
 
 // Get all surveys
-app.get('/api/surveys', (req, res) => {
-  const surveysWithStats = surveys.map(survey => ({
-    ...survey,
-    responses: responses.filter(r => r.surveyId === survey.id).length
-  }));
-  res.json(surveysWithStats);
+app.get('/api/surveys', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT s.*, 
+              COALESCE(stats.total_participants, 0) as participants,
+              COALESCE(stats.completed_participants, 0) as completions,
+              COALESCE(stats.total_responses, 0) as responses
+       FROM surveys s
+       LEFT JOIN survey_statistics stats ON s.id = stats.id
+       ORDER BY s.created_at DESC`
+    );
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching surveys:', error);
+    res.status(500).json({ error: 'Failed to fetch surveys' });
+  }
 });
 
 // Create new survey
-app.post('/api/surveys', (req, res) => {
-  const survey = createSurvey(req.body);
-  res.json(survey);
-  broadcastSurveyStats();
+app.post('/api/surveys', async (req, res) => {
+  try {
+    const survey = await createSurvey(req.body);
+    res.json(survey);
+    broadcastSurveyStats();
+  } catch (error) {
+    console.error('Error creating survey:', error);
+    res.status(500).json({ error: 'Failed to create survey' });
+  }
 });
 
 // Activate survey
-app.post('/api/surveys/:id/activate', (req, res) => {
-  const survey = activateSurvey(req.params.id);
-  if (survey) {
-    res.json(survey);
-    broadcastSurveyStats();
-  } else {
-    res.status(404).json({ error: 'Survey not found' });
+app.post('/api/surveys/:id/activate', async (req, res) => {
+  try {
+    const survey = await activateSurvey(req.params.id);
+    if (survey) {
+      res.json(survey);
+      broadcastSurveyStats();
+    } else {
+      res.status(404).json({ error: 'Survey not found' });
+    }
+  } catch (error) {
+    console.error('Error activating survey:', error);
+    res.status(500).json({ error: 'Failed to activate survey' });
   }
 });
 
 // Get survey responses
-app.get('/api/surveys/:id/responses', (req, res) => {
-  const surveyResponses = responses.filter(r => r.surveyId === req.params.id);
-  res.json(surveyResponses);
+app.get('/api/surveys/:id/responses', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT r.*, p.phone_number, p.participant_code, 
+              sp.participant_survey_code, q.question_text
+       FROM responses r
+       JOIN participants p ON r.participant_id = p.id
+       JOIN survey_participants sp ON sp.survey_id = r.survey_id AND sp.participant_id = r.participant_id
+       JOIN questions q ON r.question_id = q.id
+       WHERE r.survey_id = $1
+       ORDER BY r.created_at`,
+      [req.params.id]
+    );
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching responses:', error);
+    res.status(500).json({ error: 'Failed to fetch responses' });
+  }
 });
 
 // Get survey analytics
-app.get('/api/surveys/:id/analytics', (req, res) => {
-  const surveyResponses = responses.filter(r => r.surveyId === req.params.id);
-  const survey = surveys.find(s => s.id === req.params.id);
-  
-  if (!survey) {
-    return res.status(404).json({ error: 'Survey not found' });
-  }
-
-  const analytics = {
-    totalResponses: surveyResponses.length,
-    uniqueParticipants: new Set(surveyResponses.map(r => r.phoneNumber)).size,
-    responsesByQuestion: {}
-  };
-
-  // Analyze responses by question
-  survey.questions.forEach(question => {
-    const questionResponses = surveyResponses.filter(r => r.questionId === question.id);
+app.get('/api/surveys/:id/analytics', async (req, res) => {
+  try {
+    // Get survey details with stats
+    const surveyResult = await pool.query(
+      'SELECT * FROM survey_statistics WHERE id = $1',
+      [req.params.id]
+    );
     
-    if (question.type === 'curated' || question.type === 'multiple') {
-      analytics.responsesByQuestion[question.id] = {
-        question: question.question,
-        type: question.type,
-        responses: questionResponses.reduce((acc, r) => {
-          acc[r.answer] = (acc[r.answer] || 0) + 1;
-          return acc;
-        }, {}),
-        followUps: questionResponses.filter(r => r.followUp).map(r => r.followUp)
-      };
-    } else if (question.type === 'likert') {
-      const ratings = questionResponses.map(r => r.answer);
-      analytics.responsesByQuestion[question.id] = {
-        question: question.question,
-        type: question.type,
-        average: ratings.reduce((a, b) => a + b, 0) / ratings.length || 0,
-        distribution: ratings.reduce((acc, r) => {
-          acc[r] = (acc[r] || 0) + 1;
-          return acc;
-        }, {}),
-        followUps: questionResponses.filter(r => r.followUp).map(r => r.followUp)
-      };
+    if (surveyResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Survey not found' });
     }
-  });
-
-  res.json(analytics);
+    
+    const survey = surveyResult.rows[0];
+    
+    // Get questions
+    const questionsResult = await pool.query(
+      'SELECT * FROM questions WHERE survey_id = $1 ORDER BY question_number',
+      [req.params.id]
+    );
+    
+    // Build analytics response
+    const analytics = {
+      totalResponses: parseInt(survey.total_responses) || 0,
+      uniqueParticipants: parseInt(survey.total_participants) || 0,
+      completedSurveys: parseInt(survey.completed_participants) || 0,
+      completionRate: parseFloat(survey.completion_rate) || 0,
+      averageCompletionTime: parseInt(survey.avg_completion_seconds) || 0,
+      responsesByQuestion: {}
+    };
+    
+    // Analyze responses by question
+    for (const question of questionsResult.rows) {
+      const responsesResult = await pool.query(
+        `SELECT r.answer, r.follow_up_comment, sp.participant_survey_code
+         FROM responses r
+         JOIN survey_participants sp ON sp.survey_id = r.survey_id AND sp.participant_id = r.participant_id
+         WHERE r.survey_id = $1 AND r.question_id = $2`,
+        [req.params.id, question.id]
+      );
+      
+      if (question.question_type === 'curated' || question.question_type === 'multiple') {
+        const responses = {};
+        responsesResult.rows.forEach(r => {
+          responses[r.answer] = (responses[r.answer] || 0) + 1;
+        });
+        
+        analytics.responsesByQuestion[question.id] = {
+          question: question.question_text,
+          type: question.question_type,
+          responses: responses,
+          followUps: responsesResult.rows
+            .filter(r => r.follow_up_comment)
+            .map(r => ({
+              text: r.follow_up_comment,
+              participantId: r.participant_survey_code
+            }))
+        };
+      } else if (question.question_type === 'likert') {
+        const ratings = responsesResult.rows.map(r => parseInt(r.answer));
+        const distribution = {};
+        ratings.forEach(r => {
+          distribution[r] = (distribution[r] || 0) + 1;
+        });
+        
+        analytics.responsesByQuestion[question.id] = {
+          question: question.question_text,
+          type: question.question_type,
+          average: ratings.reduce((a, b) => a + b, 0) / ratings.length || 0,
+          distribution: distribution,
+          followUps: responsesResult.rows
+            .filter(r => r.follow_up_comment)
+            .map(r => ({
+              text: r.follow_up_comment,
+              participantId: r.participant_survey_code
+            }))
+        };
+      }
+    }
+    
+    res.json(analytics);
+  } catch (error) {
+    console.error('Error fetching analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics' });
+  }
 });
 
 // WhatsApp status
@@ -745,7 +1072,7 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
-// OpenAI configuration status (for admin dashboard)
+// OpenAI configuration status
 app.get('/api/openai/status', (req, res) => {
   res.json({
     isConfigured: isOpenAIConfigured,
@@ -763,7 +1090,7 @@ app.get('/api/openai/status', (req, res) => {
   });
 });
 
-// Test OpenAI connection (for admin dashboard setup)
+// Test OpenAI connection
 app.post('/api/openai/test', async (req, res) => {
   if (!isOpenAIConfigured) {
     return res.status(400).json({ 
@@ -774,7 +1101,6 @@ app.post('/api/openai/test', async (req, res) => {
   }
 
   try {
-    // Simple test request to verify API key works
     const response = await fetch('https://api.openai.com/v1/models', {
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`
@@ -805,26 +1131,69 @@ app.post('/api/openai/test', async (req, res) => {
   }
 });
 
-// Export survey data
-app.get('/api/surveys/:id/export', (req, res) => {
-  const surveyResponses = responses.filter(r => r.surveyId === req.params.id);
-  const survey = surveys.find(s => s.id === req.params.id);
-  
-  if (!survey) {
-    return res.status(404).json({ error: 'Survey not found' });
+// Export survey data with enhanced format
+app.get('/api/surveys/:id/export', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT 
+        sp.participant_survey_code as "ParticipantID",
+        s.title as "Survey",
+        q.question_text as "Question",
+        r.answer as "Answer",
+        COALESCE(r.follow_up_comment, '') as "FollowUpComment",
+        p.phone_number as "PhoneNumber",
+        r.created_at AT TIME ZONE 'Asia/Singapore' as "ResponseTimestamp",
+        sp.completed_at AT TIME ZONE 'Asia/Singapore' as "CompletionTimestamp",
+        CASE 
+          WHEN sp.completion_duration_seconds IS NOT NULL 
+          THEN sp.completion_duration_seconds || ' seconds'
+          ELSE 'N/A'
+        END as "CompletionDuration",
+        CASE WHEN r.voice_metadata IS NOT NULL THEN 'Yes' ELSE 'No' END as "VoiceTranscribed",
+        COALESCE(r.voice_metadata->>'originalLanguage', '') as "VoiceLanguage"
+       FROM responses r
+       JOIN participants p ON r.participant_id = p.id
+       JOIN survey_participants sp ON sp.survey_id = r.survey_id AND sp.participant_id = r.participant_id
+       JOIN questions q ON r.question_id = q.id
+       JOIN surveys s ON r.survey_id = s.id
+       WHERE r.survey_id = $1
+       ORDER BY sp.participant_survey_code, q.question_number`,
+      [req.params.id]
+    );
+    
+    // Format timestamps for Singapore timezone
+    const csvData = result.rows.map(row => ({
+      ...row,
+      PhoneNumber: row.PhoneNumber.replace('@c.us', ''),
+      ResponseTimestamp: new Date(row.ResponseTimestamp).toLocaleString('en-SG', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'Asia/Singapore'
+      }),
+      CompletionTimestamp: row.CompletionTimestamp 
+        ? new Date(row.CompletionTimestamp).toLocaleString('en-SG', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+            timeZone: 'Asia/Singapore'
+          })
+        : 'Not Completed'
+    }));
+    
+    res.json(csvData);
+  } catch (error) {
+    console.error('Error exporting survey data:', error);
+    res.status(500).json({ error: 'Failed to export survey data' });
   }
-
-  // Convert to CSV format
-  const csvData = surveyResponses.map(r => ({
-    Survey: survey.title,
-    Question: r.questionText,
-    Answer: r.answer,
-    FollowUp: r.followUp || '',
-    PhoneNumber: r.phoneNumber.replace('@c.us', ''),
-    Timestamp: r.timestamp.toISOString()
-  }));
-
-  res.json(csvData);
 });
 
 // WebSocket connection handling
@@ -832,7 +1201,6 @@ io.on('connection', (socket) => {
   console.log('Admin client connected');
   connectedClients.add(socket);
   
-  // Send current state to new client
   socket.emit('whatsapp-ready', isClientReady);
   if (qrCodeData) {
     socket.emit('qr-code', { qrCode: qrCodeData });
@@ -865,6 +1233,7 @@ server.listen(PORT, () => {
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM, shutting down gracefully');
   client.destroy();
+  pool.end();
   server.close(() => {
     console.log('Process terminated');
     process.exit(0);
