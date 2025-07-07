@@ -15,7 +15,7 @@ const FormData = require('form-data');
 const fetch = require('node-fetch');
 const { Pool } = require('pg');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 
 // Enhanced logging system
 const logger = {
