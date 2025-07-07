@@ -358,16 +358,46 @@ async function sendQuestion(session, message) {
     const question = result.rows[0];
     let questionText = `Question ${question.question_number}: ${question.question_text}`;
     
-    if (question.question_type === 'multiple') {
-      const options = JSON.parse(question.options);
-      questionText += '\n\n' + options.map((opt, idx) => `${idx + 1}. ${opt}`).join('\n');
-      questionText += '\n\nPlease reply with the number of your choice.';
-    } else if (question.question_type === 'curated') {
-      const options = JSON.parse(question.options);
+    if (question.question_type === 'multiple' || question.question_type === 'curated') {
+      let options;
+      try {
+        // Try to parse as JSON first
+        options = typeof question.options === 'string' 
+          ? JSON.parse(question.options) 
+          : question.options;
+      } catch (e) {
+        // If JSON parse fails, check if it's a comma-separated string
+        if (typeof question.options === 'string' && question.options.includes(',')) {
+          options = question.options.split(',').map(opt => opt.trim());
+        } else {
+          // Default fallback options
+          options = question.question_type === 'curated' 
+            ? ['Agree', 'Neutral', 'Disagree'] 
+            : ['Option 1', 'Option 2'];
+          logger.error('Invalid options format for question', { 
+            questionId: question.id, 
+            options: question.options 
+          });
+        }
+      }
+      
       questionText += '\n\n' + options.map((opt, idx) => `${idx + 1}. ${opt}`).join('\n');
       questionText += '\n\nPlease reply with the number of your choice.';
     } else if (question.question_type === 'likert') {
-      const scale = JSON.parse(question.scale);
+      let scale;
+      try {
+        scale = typeof question.scale === 'string' 
+          ? JSON.parse(question.scale) 
+          : question.scale;
+      } catch (e) {
+        // Default scale if parsing fails
+        scale = { min: 1, max: 5, labels: ['Poor', 'Excellent'] };
+        logger.error('Invalid scale format for question', { 
+          questionId: question.id, 
+          scale: question.scale 
+        });
+      }
+      
       questionText += `\n\nRate from ${scale.min} to ${scale.max}`;
       questionText += `\n(${scale.min} = ${scale.labels[0]}, ${scale.max} = ${scale.labels[1]})`;
     } else if (question.question_type === 'text') {
@@ -382,12 +412,16 @@ async function sendQuestion(session, message) {
       [question.question_number, session.id]
     );
     
+  } catch (error) {
+    logger.error('Error in sendQuestion', error);
+    await message.reply('Sorry, there was an error loading the question. Please try again.');
   } finally {
     client.release();
   }
 }
 
 // Process response
+// Also fix the processResponse function to handle the same issue:
 async function processResponse(session, message) {
   const client = await pool.connect();
   try {
@@ -423,7 +457,20 @@ async function processResponse(session, message) {
     
     // Validate answer based on question type
     if (question.question_type === 'multiple' || question.question_type === 'curated') {
-      const options = JSON.parse(question.options);
+      let options;
+      try {
+        options = typeof question.options === 'string' 
+          ? JSON.parse(question.options) 
+          : question.options;
+      } catch (e) {
+        // Handle comma-separated string
+        if (typeof question.options === 'string' && question.options.includes(',')) {
+          options = question.options.split(',').map(opt => opt.trim());
+        } else {
+          options = ['Option 1', 'Option 2'];
+        }
+      }
+      
       const choice = parseInt(answer);
       if (choice >= 1 && choice <= options.length) {
         answer = options[choice - 1];
@@ -432,7 +479,15 @@ async function processResponse(session, message) {
         return;
       }
     } else if (question.question_type === 'likert') {
-      const scale = JSON.parse(question.scale);
+      let scale;
+      try {
+        scale = typeof question.scale === 'string' 
+          ? JSON.parse(question.scale) 
+          : question.scale;
+      } catch (e) {
+        scale = { min: 1, max: 5 };
+      }
+      
       const rating = parseInt(answer);
       if (rating >= scale.min && rating <= scale.max) {
         answer = rating.toString();
@@ -462,11 +517,13 @@ async function processResponse(session, message) {
       answer: answer
     });
     
+  } catch (error) {
+    logger.error('Error in processResponse', error);
+    await message.reply('Sorry, something went wrong. Please try again.');
   } finally {
     client.release();
   }
 }
-
 // Complete survey
 async function completeSurvey(session, message) {
   const client = await pool.connect();
