@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
     current_question INTEGER DEFAULT 0,
     stage VARCHAR(50) DEFAULT 'initial',
-    session_data JSONB,
+    session_data JSONB DEFAULT '{}',
     started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
