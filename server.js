@@ -1,5 +1,5 @@
-// server.js - Complete WhatsApp Survey Platform Server
-// Production-ready server with all functionality and Render.com fixes
+// server.js - Complete WhatsApp Survey Platform Server with All Features
+// Includes voice follow-up validation and real-time analytics
 
 require('dotenv').config();
 
@@ -54,23 +54,12 @@ const io = socketIo(server, {
   }
 });
 
-// Security middleware with Socket.IO compatibility
+// Security middleware - allowing inline scripts temporarily
 app.use(helmet({
-  contentSecurityPolicy: {
-    useDefaults: false,
-    directives: {
-      defaultSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:", "http:", "data:", "ws:", "wss:"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:", "http:"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https:", "http:"],
-      imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
-      fontSrc: ["'self'", "https:", "http:", "data:"],
-      objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
-      frameSrc: ["'none'"],
-    }
-  }
+  contentSecurityPolicy: false, // Disabled temporarily for easier development
+  crossOriginEmbedderPolicy: false
 }));
+
 // CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
@@ -316,9 +305,14 @@ async function createSession(phoneNumber, surveyId, participantId) {
     );
     
     // Create survey_participant entry
+    const participantSurveyCode = await client.query(
+      'SELECT get_next_participant_code($1) as code',
+      [surveyId]
+    );
+    
     await client.query(
       'INSERT INTO survey_participants (survey_id, participant_id, participant_survey_code) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-      [surveyId, participantId, generateParticipantCode()]
+      [surveyId, participantId, participantSurveyCode.rows[0].code || generateParticipantCode()]
     );
     
     return result.rows[0];
@@ -420,11 +414,22 @@ async function sendQuestion(session, message) {
   }
 }
 
-// Process response
-// Also fix the processResponse function to handle the same issue:
+// Process response with voice follow-up support
 async function processResponse(session, message) {
   const client = await pool.connect();
   try {
+    // Check if this is a voice confirmation response
+    if (session.stage === 'voice_confirmation') {
+      await handleVoiceConfirmation(session, message, client);
+      return;
+    }
+    
+    // Check if this is a follow-up response
+    if (session.stage === 'followup') {
+      await handleFollowupResponse(session, message, client);
+      return;
+    }
+    
     const result = await client.query(
       'SELECT * FROM questions WHERE survey_id = $1 AND question_number = $2',
       [session.survey_id, session.current_question]
@@ -445,11 +450,38 @@ async function processResponse(session, message) {
       const media = await message.downloadMedia();
       if (isOpenAIConfigured) {
         const transcription = await transcribeVoice(media);
-        answer = transcription || 'Voice message (transcription failed)';
-        voiceMetadata = { 
-          duration: message.duration || 0,
-          transcribed: !!transcription 
-        };
+        if (transcription) {
+          answer = transcription;
+          voiceMetadata = { 
+            duration: message.duration || 0,
+            transcribed: true,
+            originalTranscription: transcription
+          };
+          
+          // Store transcription in session for confirmation
+          await client.query(
+            `UPDATE sessions 
+             SET session_data = jsonb_set(
+               COALESCE(session_data, '{}'), 
+               '{pendingVoiceResponse}', 
+               $1::jsonb
+             ),
+             stage = 'voice_confirmation'
+             WHERE id = $2`,
+            [JSON.stringify({ 
+              answer, 
+              questionId: question.id, 
+              voiceMetadata,
+              questionType: question.question_type 
+            }), session.id]
+          );
+          
+          // Ask for confirmation
+          await message.reply(`I heard: "${answer}"\n\nIs this correct?\n1. Yes\n2. No, let me try again`);
+          return;
+        } else {
+          answer = 'Voice message (transcription failed)';
+        }
       } else {
         answer = 'Voice message (transcription not available)';
       }
@@ -503,19 +535,40 @@ async function processResponse(session, message) {
       [session.survey_id, session.participant_id, question.id, answer, followUpComment, voiceMetadata ? JSON.stringify(voiceMetadata) : null]
     );
     
-    // Send confirmation and next question
+    // Send confirmation
     await message.reply(`Thank you! Your answer: "${answer}"`);
+    
+    // Broadcast new response for real-time analytics
+    const responseData = {
+      surveyId: session.survey_id,
+      participantId: session.participant_id,
+      phoneNumber: session.phone_number,
+      question: question.question_text,
+      answer: answer,
+      timestamp: new Date().toISOString()
+    };
+    io.emit('new-response', responseData);
+    
+    // Ask follow-up for text responses
+    if (question.question_type === 'text' && isOpenAIConfigured) {
+      await client.query(
+        `UPDATE sessions 
+         SET stage = 'followup',
+             session_data = jsonb_set(
+               COALESCE(session_data, '{}'), 
+               '{lastQuestionId}', 
+               $1::jsonb
+             )
+         WHERE id = $2`,
+        [question.id.toString(), session.id]
+      );
+      
+      await message.reply(`Would you like to elaborate on your answer? You can send a voice message or type "skip" to continue.`);
+      return;
+    }
     
     // Move to next question
     await sendQuestion(session, message);
-    
-    // Broadcast new response
-    io.emit('new-response', {
-      participant: session.phone_number,
-      survey: session.survey_id,
-      question: question.question_text,
-      answer: answer
-    });
     
   } catch (error) {
     logger.error('Error in processResponse', error);
@@ -524,10 +577,123 @@ async function processResponse(session, message) {
     client.release();
   }
 }
+
+// Handle voice confirmation
+async function handleVoiceConfirmation(session, message, client) {
+  try {
+    const response = message.body.trim();
+    const sessionData = session.session_data || {};
+    const pendingResponse = sessionData.pendingVoiceResponse;
+    
+    if (!pendingResponse) {
+      await message.reply('Sorry, I lost track of your response. Please answer the question again.');
+      await client.query('UPDATE sessions SET stage = $1 WHERE id = $2', ['survey', session.id]);
+      return;
+    }
+    
+    if (response === '1' || response.toLowerCase() === 'yes') {
+      // Save the transcribed response
+      await client.query(
+        'INSERT INTO responses (survey_id, participant_id, question_id, answer, voice_metadata) VALUES ($1, $2, $3, $4, $5)',
+        [session.survey_id, session.participant_id, pendingResponse.questionId, pendingResponse.answer, JSON.stringify(pendingResponse.voiceMetadata)]
+      );
+      
+      await message.reply(`Great! Your answer has been recorded: "${pendingResponse.answer}"`);
+      
+      // Clear pending response and move to next question
+      await client.query(
+        'UPDATE sessions SET stage = $1, session_data = session_data - $2 WHERE id = $3',
+        ['survey', 'pendingVoiceResponse', session.id]
+      );
+      
+      // Broadcast response
+      io.emit('new-response', {
+        surveyId: session.survey_id,
+        participantId: session.participant_id,
+        phoneNumber: session.phone_number,
+        answer: pendingResponse.answer,
+        isVoice: true,
+        timestamp: new Date().toISOString()
+      });
+      
+      await sendQuestion(session, message);
+    } else if (response === '2' || response.toLowerCase() === 'no') {
+      // Clear pending response and ask to try again
+      await client.query(
+        'UPDATE sessions SET stage = $1, session_data = session_data - $2 WHERE id = $3',
+        ['survey', 'pendingVoiceResponse', session.id]
+      );
+      
+      await message.reply('No problem! Please send your voice message again or type your answer.');
+    } else {
+      await message.reply('Please reply with:\n1. Yes\n2. No, let me try again');
+    }
+  } catch (error) {
+    logger.error('Error in handleVoiceConfirmation', error);
+    await message.reply('Sorry, something went wrong. Please try again.');
+  }
+}
+
+// Handle follow-up responses
+async function handleFollowupResponse(session, message, client) {
+  try {
+    if (message.body.toLowerCase() === 'skip') {
+      // Move to next question
+      await client.query('UPDATE sessions SET stage = $1 WHERE id = $2', ['survey', session.id]);
+      await sendQuestion(session, message);
+      return;
+    }
+    
+    let followUpComment = message.body;
+    let voiceMetadata = null;
+    
+    // Handle voice follow-up
+    if (message.hasMedia && message.type === 'ptt') {
+      const media = await message.downloadMedia();
+      if (isOpenAIConfigured) {
+        const transcription = await transcribeVoice(media);
+        followUpComment = transcription || 'Voice follow-up (transcription failed)';
+        voiceMetadata = { 
+          duration: message.duration || 0,
+          transcribed: !!transcription 
+        };
+      }
+    }
+    
+    // Update the last response with follow-up
+    const lastQuestionId = session.session_data?.lastQuestionId;
+    if (lastQuestionId) {
+      await client.query(
+        'UPDATE responses SET follow_up_comment = $1 WHERE survey_id = $2 AND participant_id = $3 AND question_id = $4',
+        [followUpComment, session.survey_id, session.participant_id, lastQuestionId]
+      );
+    }
+    
+    await message.reply('Thank you for the additional feedback!');
+    
+    // Move to next question
+    await client.query('UPDATE sessions SET stage = $1 WHERE id = $2', ['survey', session.id]);
+    await sendQuestion(session, message);
+    
+  } catch (error) {
+    logger.error('Error in handleFollowupResponse', error);
+    await message.reply('Sorry, something went wrong. Please try again.');
+  }
+}
+
 // Complete survey
 async function completeSurvey(session, message) {
   const client = await pool.connect();
   try {
+    // Calculate duration
+    const startTime = await client.query(
+      'SELECT started_at FROM survey_participants WHERE survey_id = $1 AND participant_id = $2',
+      [session.survey_id, session.participant_id]
+    );
+    
+    const duration = startTime.rows[0] ? 
+      Math.floor((new Date() - new Date(startTime.rows[0].started_at)) / 1000) : 0;
+    
     // Update session
     await client.query(
       'UPDATE sessions SET stage = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
@@ -536,17 +702,19 @@ async function completeSurvey(session, message) {
     
     // Update survey_participants
     await client.query(
-      'UPDATE survey_participants SET completed_at = CURRENT_TIMESTAMP, is_completed = true WHERE survey_id = $1 AND participant_id = $2',
-      [session.survey_id, session.participant_id]
+      'UPDATE survey_participants SET completed_at = CURRENT_TIMESTAMP, is_completed = true, completion_duration_seconds = $1 WHERE survey_id = $2 AND participant_id = $3',
+      [duration, session.survey_id, session.participant_id]
     );
     
     // Send completion message
-    await message.reply('🎉 Thank you for completing the survey! Your responses have been recorded.');
+    await message.reply('🎉 Thank you for completing the survey! Your responses have been recorded.\n\nHave a great day! 😊');
     
     // Broadcast completion
     io.emit('survey-completed', {
       participant: session.phone_number,
-      survey: session.survey_id
+      surveyId: session.survey_id,
+      duration: duration,
+      timestamp: new Date().toISOString()
     });
     
   } finally {
@@ -623,7 +791,8 @@ app.get('/api/surveys', async (req, res) => {
     const result = await client.query(`
       SELECT s.*, 
              COUNT(DISTINCT q.id) as question_count,
-             COUNT(DISTINCT sp.participant_id) as participant_count
+             COUNT(DISTINCT sp.participant_id) as participant_count,
+             COUNT(DISTINCT CASE WHEN sp.is_completed THEN sp.participant_id END) as completed_count
       FROM surveys s
       LEFT JOIN questions q ON s.id = q.survey_id
       LEFT JOIN survey_participants sp ON s.id = sp.survey_id
@@ -739,6 +908,37 @@ app.post('/api/surveys/:id/deactivate', async (req, res) => {
   }
 });
 
+// Get survey responses for analytics
+app.get('/api/surveys/:id/responses', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    
+    const result = await client.query(`
+      SELECT 
+        q.question_text,
+        q.question_type,
+        q.question_number,
+        r.answer,
+        r.follow_up_comment,
+        r.created_at,
+        p.participant_code
+      FROM responses r
+      JOIN questions q ON r.question_id = q.id
+      JOIN participants p ON r.participant_id = p.id
+      WHERE r.survey_id = $1
+      ORDER BY q.question_number, r.created_at
+    `, [id]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    logger.error('Error fetching survey responses', error);
+    res.status(500).json({ error: 'Failed to fetch responses' });
+  } finally {
+    client.release();
+  }
+});
+
 // Export survey data
 app.get('/api/surveys/:id/export', async (req, res) => {
   const client = await pool.connect();
@@ -810,7 +1010,8 @@ app.get('/api/openai/status', (req, res) => {
   res.json({ 
     configured: !!process.env.OPENAI_API_KEY,
     features: {
-      voiceTranscription: !!process.env.OPENAI_API_KEY
+      voiceTranscription: !!process.env.OPENAI_API_KEY,
+      followUpQuestions: !!process.env.OPENAI_API_KEY
     }
   });
 });
