@@ -222,7 +222,7 @@ function initializeWhatsApp() {
           });
         }
         
-        await handleWhatsAppMessage(message);
+        await handleWhatsAppMessageWithCommands(message);
       }
     });
 
