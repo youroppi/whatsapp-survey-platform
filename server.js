@@ -761,27 +761,6 @@ async function processResponse(session, message) {
       );
     }
     
-    // Create conversational acknowledgment based on question type
-    let acknowledgment = '';
-    
-    if (question.question_type === 'curated') {
-      if (formattedAnswer === 'agree') {
-        acknowledgment = `Thank you for sharing that you agree with the statement.`;
-      } else if (formattedAnswer === 'disagree') {
-        acknowledgment = `Thank you for sharing that you disagree with the statement.`;
-      } else if (formattedAnswer === 'neutral' || formattedAnswer === 'undecided') {
-        acknowledgment = `Thank you for sharing that you're undecided about this statement.`;
-      } else {
-        acknowledgment = `Thank you for your response.`;
-      }
-    } else if (question.question_type === 'multiple') {
-      acknowledgment = `Thank you for selecting "${answer}".`;
-    } else if (question.question_type === 'likert') {
-      acknowledgment = `Thank you for giving ${formattedAnswer}.`;
-    } else {
-      acknowledgment = `Thank you for your response.`;
-    }
-    
     // Broadcast new response for real-time analytics
     const responseData = {
       surveyId: session.survey_id,
@@ -793,56 +772,48 @@ async function processResponse(session, message) {
     };
     io.emit('new-response', responseData);
     
-    // Ask follow-up question with conversational tone
-    const shouldAskFollowUp = true; // You can make this configurable per survey
+    // ALWAYS ask follow-up question (THIS IS THE KEY CHANGE)
+    // Update session to follow-up stage
+    await client.query(
+      `UPDATE sessions 
+       SET stage = 'followup',
+           session_data = jsonb_set(
+             COALESCE(session_data, '{}'), 
+             '{lastQuestionId}', 
+             $1::jsonb
+           )
+       WHERE id = $2`,
+      [question.id.toString(), session.id]
+    );
     
-    if (shouldAskFollowUp && isOpenAIConfigured) {
-      await client.query(
-        `UPDATE sessions 
-         SET stage = 'followup',
-             session_data = jsonb_set(
-               COALESCE(session_data, '{}'), 
-               '{lastQuestionId}', 
-               $1::jsonb
-             )
-         WHERE id = $2`,
-        [question.id.toString(), session.id]
-      );
-      
-      // Conversational follow-up message
-      let followUpMessage = acknowledgment + ' ';
-      
-      if (question.question_type === 'curated') {
-        if (formattedAnswer === 'agree') {
-          followUpMessage += `Can you tell me more about why you agree?\n\n`;
-        } else if (formattedAnswer === 'disagree') {
-          followUpMessage += `Can you tell me more about why you disagree?\n\n`;
-        } else {
-          followUpMessage += `Can you tell me more about why you're undecided?\n\n`;
-        }
-      } else if (question.question_type === 'multiple') {
-        followUpMessage += `Can you tell me more about why you chose this option?\n\n`;
-      } else if (question.question_type === 'likert') {
-        followUpMessage += `Can you tell me more about why you gave this rating?\n\n`;
+    // Create conversational acknowledgment and follow-up message
+    let followUpMessage = '';
+    
+    if (question.question_type === 'curated') {
+      if (formattedAnswer === 'agree') {
+        followUpMessage = `Thank you for sharing that you agree with the statement. Can you tell me more about why you agree?\n\n`;
+      } else if (formattedAnswer === 'disagree') {
+        followUpMessage = `Thank you for sharing that you disagree with the statement. Can you tell me more about why you disagree?\n\n`;
+      } else if (formattedAnswer === 'neutral' || formattedAnswer === 'undecided') {
+        followUpMessage = `Thank you for sharing that you're undecided about this statement. Can you tell me more about why you're undecided?\n\n`;
       } else {
-        followUpMessage += `Would you like to elaborate on your answer?\n\n`;
+        followUpMessage = `Thank you for your response. Can you tell me more about your answer?\n\n`;
       }
-      
-      followUpMessage += `You can:\n`;
-      followUpMessage += `🎤 Send a voice message (I'll transcribe it)\n`;
-      followUpMessage += `💬 Type your response\n`;
-      followUpMessage += `⏭️ Type 'skip' to continue\n\n`;
-      followUpMessage += `I'd love to hear your thoughts!`;
-      
-      await message.reply(followUpMessage);
-      return;
+    } else if (question.question_type === 'multiple') {
+      followUpMessage = `Thank you for selecting "${answer}". Can you tell me more about why you chose this option?\n\n`;
+    } else if (question.question_type === 'likert') {
+      followUpMessage = `Thank you for giving ${formattedAnswer}. Can you tell me more about why you gave this rating?\n\n`;
+    } else {
+      followUpMessage = `Thank you for your response. Would you like to elaborate on your answer?\n\n`;
     }
     
-    // If no follow-up, just send acknowledgment and move to next question
-    await message.reply(acknowledgment);
+    followUpMessage += `You can:\n`;
+    followUpMessage += `🎤 Send a voice message (I'll transcribe it)\n`;
+    followUpMessage += `💬 Type your response\n`;
+    followUpMessage += `⏭️ Type 'skip' to continue\n\n`;
+    followUpMessage += `I'd love to hear your thoughts!`;
     
-    // Move to next question
-    await sendQuestion(session, message);
+    await message.reply(followUpMessage);
     
   } catch (error) {
     logger.error('Error in processResponse', error);
