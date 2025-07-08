@@ -335,6 +335,64 @@ async function getActiveSession(phoneNumber) {
     client.release();
   }
 }
+// Updated createSession with better error handling
+async function createSession(phoneNumber, surveyId, participantId) {
+  const client = await pool.connect();
+  try {
+    // First check if session already exists
+    const existingSession = await client.query(
+      'SELECT * FROM sessions WHERE phone_number = $1 AND survey_id = $2',
+      [phoneNumber, surveyId]
+    );
+    
+    if (existingSession.rows.length > 0) {
+      // Session already exists, return it
+      logger.info(`Session already exists for phone ${phoneNumber} and survey ${surveyId}`);
+      return existingSession.rows[0];
+    }
+    
+    // Create new session
+    const result = await client.query(
+      'INSERT INTO sessions (phone_number, survey_id, participant_id, current_question, stage) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [phoneNumber, surveyId, participantId, 0, 'survey']
+    );
+    
+    // Create or update survey_participant entry
+    const participantSurveyCode = await client.query(
+      'SELECT get_next_participant_code($1) as code',
+      [surveyId]
+    );
+    
+    await client.query(
+      `INSERT INTO survey_participants (survey_id, participant_id, participant_survey_code) 
+       VALUES ($1, $2, $3) 
+       ON CONFLICT (survey_id, participant_id) 
+       DO UPDATE SET started_at = CURRENT_TIMESTAMP`,
+      [surveyId, participantId, participantSurveyCode.rows[0].code || generateParticipantCode()]
+    );
+    
+    return result.rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      // Duplicate key error - session already exists
+      logger.warn(`Duplicate session detected for phone ${phoneNumber} and survey ${surveyId}`);
+      
+      // Return existing session
+      const existingSession = await client.query(
+        'SELECT * FROM sessions WHERE phone_number = $1 AND survey_id = $2',
+        [phoneNumber, surveyId]
+      );
+      
+      if (existingSession.rows.length > 0) {
+        return existingSession.rows[0];
+      }
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // Additional helper function to reset a session if needed
 async function resetSession(phoneNumber, surveyId) {
   const client = await pool.connect();
