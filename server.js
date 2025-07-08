@@ -242,17 +242,18 @@ async function handleWhatsAppMessage(message) {
     // Get or create participant
     const participant = await getOrCreateParticipant(phoneNumber);
     
-    // Check for active session
-    let session = await getActiveSession(phoneNumber);
+    // Get active survey first
+    const activeSurvey = await getActiveSurvey();
+    if (!activeSurvey) {
+      await message.reply('Sorry, no surveys are currently active. Please check back later.');
+      return;
+    }
+    
+    // Check for ANY existing session (active or completed) for this survey
+    let session = await getSessionForSurvey(phoneNumber, activeSurvey.id);
     
     if (!session) {
-      // Start new survey session
-      const activeSurvey = await getActiveSurvey();
-      if (!activeSurvey) {
-        await message.reply('Sorry, no surveys are currently active. Please check back later.');
-        return;
-      }
-      
+      // No session exists at all - create new one
       session = await createSession(phoneNumber, activeSurvey.id, participant.id);
       
       // Send welcome message
@@ -261,8 +262,12 @@ async function handleWhatsAppMessage(message) {
       
       // Send first question
       await sendQuestion(session, message);
+    } else if (session.stage === 'completed') {
+      // Session exists and is completed
+      await message.reply('Thank you! You have already completed this survey. 🎉\n\nWe appreciate your participation!');
+      return;
     } else {
-      // Continue existing session
+      // Session exists and is not completed - continue
       await processResponse(session, message);
     }
   } catch (error) {
@@ -304,13 +309,12 @@ function generateParticipantCode() {
   return result;
 }
 
-// Get active session
-async function getActiveSession(phoneNumber) {
+async function getSessionForSurvey(phoneNumber, surveyId) {
   const client = await pool.connect();
   try {
     const result = await client.query(
-      'SELECT * FROM sessions WHERE phone_number = $1 AND stage != $2',
-      [phoneNumber, 'completed']
+      'SELECT * FROM sessions WHERE phone_number = $1 AND survey_id = $2',
+      [phoneNumber, surveyId]
     );
     return result.rows[0] || null;
   } finally {
@@ -318,29 +322,125 @@ async function getActiveSession(phoneNumber) {
   }
 }
 
-// Create new session
-async function createSession(phoneNumber, surveyId, participantId) {
+// Updated getActiveSession to only get non-completed sessions
+async function getActiveSession(phoneNumber) {
   const client = await pool.connect();
   try {
     const result = await client.query(
-      'INSERT INTO sessions (phone_number, survey_id, participant_id, current_question, stage) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [phoneNumber, surveyId, participantId, 0, 'survey']
+      'SELECT * FROM sessions WHERE phone_number = $1 AND stage != $2 ORDER BY updated_at DESC LIMIT 1',
+      [phoneNumber, 'completed']
     );
-    
-    // Create survey_participant entry
-    const participantSurveyCode = await client.query(
-      'SELECT get_next_participant_code($1) as code',
-      [surveyId]
-    );
-    
-    await client.query(
-      'INSERT INTO survey_participants (survey_id, participant_id, participant_survey_code) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
-      [surveyId, participantId, participantSurveyCode.rows[0].code || generateParticipantCode()]
-    );
-    
-    return result.rows[0];
+    return result.rows[0] || null;
   } finally {
     client.release();
+  }
+}
+// Additional helper function to reset a session if needed
+async function resetSession(phoneNumber, surveyId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Get the session
+    const sessionResult = await client.query(
+      'SELECT * FROM sessions WHERE phone_number = $1 AND survey_id = $2',
+      [phoneNumber, surveyId]
+    );
+    
+    if (sessionResult.rows.length === 0) {
+      throw new Error('Session not found');
+    }
+    
+    const session = sessionResult.rows[0];
+    
+    // Delete existing responses
+    await client.query(
+      'DELETE FROM responses WHERE survey_id = $1 AND participant_id = $2',
+      [surveyId, session.participant_id]
+    );
+    
+    // Reset session
+    await client.query(
+      'UPDATE sessions SET current_question = 0, stage = $1, session_data = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
+      ['survey', '{}', session.id]
+    );
+    
+    // Reset survey_participant
+    await client.query(
+      'UPDATE survey_participants SET started_at = CURRENT_TIMESTAMP, completed_at = NULL, is_completed = FALSE, completion_duration_seconds = NULL WHERE survey_id = $1 AND participant_id = $2',
+      [surveyId, session.participant_id]
+    );
+    
+    await client.query('COMMIT');
+    
+    return sessionResult.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Add a command handler for special commands (optional)
+async function handleSpecialCommands(message, phoneNumber) {
+  const command = message.body.toLowerCase().trim();
+  
+  if (command === '/reset' || command === 'reset survey') {
+    const activeSurvey = await getActiveSurvey();
+    if (!activeSurvey) {
+      await message.reply('No active survey to reset.');
+      return true;
+    }
+    
+    try {
+      await resetSession(phoneNumber, activeSurvey.id);
+      await message.reply('Your survey has been reset. Type "Hello" to start again.');
+      return true;
+    } catch (error) {
+      logger.error('Error resetting session', error);
+      await message.reply('Sorry, I couldn\'t reset your survey. Please try again later.');
+      return true;
+    }
+  }
+  
+  if (command === '/status' || command === 'status') {
+    const activeSurvey = await getActiveSurvey();
+    if (!activeSurvey) {
+      await message.reply('No active survey at the moment.');
+      return true;
+    }
+    
+    const session = await getSessionForSurvey(phoneNumber, activeSurvey.id);
+    if (!session) {
+      await message.reply(`Survey "${activeSurvey.title}" is available. Type "Hello" to start!`);
+    } else if (session.stage === 'completed') {
+      await message.reply(`You have completed the survey "${activeSurvey.title}". Thank you!`);
+    } else {
+      await message.reply(`You are currently on question ${session.current_question} of survey "${activeSurvey.title}".`);
+    }
+    return true;
+  }
+  
+  return false;
+}
+
+// Update the main message handler to include command handling
+async function handleWhatsAppMessageWithCommands(message) {
+  try {
+    const phoneNumber = message.from.replace('@c.us', '');
+    
+    // Check for special commands first
+    const isCommand = await handleSpecialCommands(message, phoneNumber);
+    if (isCommand) {
+      return;
+    }
+    
+    // Continue with normal message handling
+    await handleWhatsAppMessage(message);
+  } catch (error) {
+    logger.error('Error in message handler', error);
+    await message.reply('Sorry, something went wrong. Please try again later.');
   }
 }
 
