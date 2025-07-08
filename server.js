@@ -604,7 +604,72 @@ async function sendQuestion(session, message) {
   }
 }
 
-// Fixed processResponse function with duplicate handling and enhanced voice support
+async function transcribeVoice(media) {
+  if (!process.env.OPENAI_API_KEY) {
+    logger.warn('OpenAI API key not configured');
+    return null;
+  }
+  
+  try {
+    logger.info('Starting voice transcription...');
+    
+    // Convert base64 to buffer
+    const audioBuffer = Buffer.from(media.data, 'base64');
+    logger.info(`Audio buffer size: ${audioBuffer.length} bytes`);
+    
+    // Create form data
+    const formData = new FormData();
+    
+    // Determine file extension based on mimetype
+    let fileExtension = 'ogg';
+    if (media.mimetype.includes('mp4')) {
+      fileExtension = 'mp4';
+    } else if (media.mimetype.includes('mpeg')) {
+      fileExtension = 'mp3';
+    } else if (media.mimetype.includes('wav')) {
+      fileExtension = 'wav';
+    } else if (media.mimetype.includes('webm')) {
+      fileExtension = 'webm';
+    }
+    
+    // Append the audio file with proper filename
+    formData.append('file', audioBuffer, {
+      filename: `audio.${fileExtension}`,
+      contentType: media.mimetype
+    });
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'en'); // You can make this dynamic based on user preference
+    
+    // Make request to OpenAI
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        ...formData.getHeaders()
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error(`OpenAI API error: ${response.status} - ${errorText}`);
+      return null;
+    }
+    
+    const result = await response.json();
+    logger.info(`Transcription successful: ${result.text}`);
+    
+    return result.text;
+    
+  } catch (error) {
+    logger.error('Error transcribing voice:', error);
+    return null;
+  }
+}
+
+// Complete processResponse function with all fixes
+// Replace your existing processResponse function with this one
+
 async function processResponse(session, message) {
   const client = await pool.connect();
   try {
@@ -755,9 +820,6 @@ async function processResponse(session, message) {
       );
     }
     
-    // Send confirmation
-    await message.reply(`Thank you! Your answer: "${answer}"`);
-    
     // Broadcast new response for real-time analytics
     const responseData = {
       surveyId: session.survey_id,
@@ -769,26 +831,59 @@ async function processResponse(session, message) {
     };
     io.emit('new-response', responseData);
     
-    // Ask follow-up for text responses
-    if (question.question_type === 'text' && isOpenAIConfigured) {
-      await client.query(
-        `UPDATE sessions 
-         SET stage = 'followup',
-             session_data = jsonb_set(
-               COALESCE(session_data, '{}'), 
-               '{lastQuestionId}', 
-               $1::jsonb
-             )
-         WHERE id = $2`,
-        [question.id.toString(), session.id]
-      );
-      
-      await message.reply(`Would you like to elaborate on your answer? You can send a voice message or type "skip" to continue.`);
-      return;
+    // ALWAYS ask follow-up for ALL question types
+    // Update session to follow-up stage
+    await client.query(
+      `UPDATE sessions 
+       SET stage = 'followup',
+           session_data = jsonb_set(
+             COALESCE(session_data, '{}'), 
+             '{lastQuestionId}', 
+             $1::jsonb
+           )
+       WHERE id = $2`,
+      [question.id.toString(), session.id]
+    );
+    
+    // Create conversational acknowledgment based on question type and answer
+    let followUpMessage = '';
+    
+    if (question.question_type === 'curated') {
+      // Handle Agree/Disagree questions
+      const lowerAnswer = answer.toLowerCase();
+      if (lowerAnswer === 'agree') {
+        followUpMessage = 'Thank you for sharing that you agree with the statement. Can you tell me more about why you agree?\n\n';
+      } else if (lowerAnswer === 'disagree') {
+        followUpMessage = 'Thank you for sharing that you disagree with the statement. Can you tell me more about why you disagree?\n\n';
+      } else if (lowerAnswer === 'neutral' || lowerAnswer === 'undecided') {
+        followUpMessage = 'Thank you for sharing that you\'re undecided about this statement. Can you tell me more about why you\'re undecided?\n\n';
+      } else {
+        followUpMessage = `Thank you for your answer: "${answer}". Can you tell me more about your response?\n\n`;
+      }
+    } else if (question.question_type === 'multiple') {
+      // Handle multiple choice questions
+      followUpMessage = `Thank you for selecting "${answer}". Can you tell me more about why you chose this option?\n\n`;
+    } else if (question.question_type === 'likert') {
+      // Handle rating scale questions
+      followUpMessage = `Thank you for giving a rating of ${answer}. Can you tell me more about why you gave this rating?\n\n`;
+    } else if (question.question_type === 'text') {
+      // Handle text questions
+      followUpMessage = 'Thank you for your response. Would you like to elaborate on your answer?\n\n';
+    } else {
+      // Default for any other question type
+      followUpMessage = `Thank you for your answer: "${answer}". Can you tell me more about your response?\n\n`;
     }
     
-    // Move to next question
-    await sendQuestion(session, message);
+    // Add instructions for follow-up
+    followUpMessage += 'You can:\n';
+    followUpMessage += '🎤 Send a voice message (I\'ll transcribe it)\n';
+    followUpMessage += '💬 Type your response\n';
+    followUpMessage += '⏭️ Type \'skip\' to continue\n\n';
+    followUpMessage += 'I\'d love to hear your thoughts!';
+    
+    await message.reply(followUpMessage);
+    // IMPORTANT: Return here to prevent moving to next question
+    return;
     
   } catch (error) {
     logger.error('Error in processResponse', error);
